@@ -6,8 +6,8 @@ Hardware-rooted signing CLI: one self-contained Go binary that proves _which mac
 
 These are deliberate boundaries, not gaps — the code shows what is present, never what is deliberately absent and why.
 
-- **Vendors no broker code and makes no authorisation decision.** signet proves possession of a hardware key; the broker alone issues challenges, verifies signatures, mints bearers, and fixes vend scope. It speaks the `/v1/attest/*` HTTP contract (plus the public `/v1/credentials/{name}` vend door) and nothing more — no sidecar, no PKCS#11 module. Detail: `15-attest-boundary.md`.
-- **Never falls back to a software key.** A host without secure hardware fails loudly rather than degrading to a key on disk, so "hardware-rooted" is never a claim that is sometimes false. No key at rest: the only on-disk state is a short-lived bearer cache and (macOS) an opaque, machine-bound Enclave blob. Detail: `20-key-custody.md`.
+- **Vendors no broker code and makes no authorisation decision.** signet proves possession of a hardware key; the broker alone issues challenges, verifies signatures, mints bearers, and fixes vend scope. It speaks the `/v1/attest/*` HTTP contract (plus the public `/v1/credentials/{name}` vend door) and nothing more — no sidecar, no PKCS#11 module. Detail: `.claude/rules/attest-boundary.md`.
+- **Never falls back to a software key.** A host without secure hardware fails loudly rather than degrading to a key on disk, so "hardware-rooted" is never a claim that is sometimes false. No key at rest: the only on-disk state is a short-lived bearer cache and (macOS) an opaque, machine-bound Enclave blob. Detail: `.claude/rules/key-custody.md`.
 - **A thin credential helper, not a framework.** The protocol half (challenge → sign → token → renew) is deliberately small and specific to one broker's contract. SPIRE, mTLS meshes, and full PKI are heavier answers to a problem a single broker does not have — do not grow it into one.
 - **Single-shot, not resident.** Every subcommand runs once and exits, like `git credential` / `docker-credential-*` / AWS `credential_process`. The lone long-lived mode is `agent`, which owns the hardware for socket clients and serves pubkey/sign only, never touching the broker.
 
@@ -29,4 +29,4 @@ make test    # CGO_ENABLED=1 go test ./...
 
 ## CI deviations from the household standard
 
-- **No `auto-label-issues` caller.** `rules-library/core/ci-workflow-standard.md` requires every repo to delegate issue auto-labelling to the master-project reusable, and permits a public repo that cannot resolve it to omit the caller provided the omission is recorded. signet is public and `poodle64/master-project` is private, so the reusable is unresolvable here; labels are applied at creation time by the `/git-issue` skill instead. Recorded 2026-08-11 — the omission was correct but had never been written down, which the umbrella rule treats as a defect in its own right.
+- **No `auto-label-issues` caller.** `rules-library/core/ci-workflow-standard.md` permits a public repo that cannot resolve the private master-project reusable to omit the caller provided the omission is recorded. signet is public and `poodle64/master-project` is private, so labels are applied at creation time by the `/git-issue` skill instead.
