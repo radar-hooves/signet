@@ -17,7 +17,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // tokenResult is the broker's response to /v1/attest/token and /v1/attest/renew.

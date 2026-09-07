@@ -4,7 +4,7 @@
 
 _The key that proves which machine you are; sealed in hardware, exportable to no one._
 
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/) [![Release](https://img.shields.io/github/v/release/poodle64/signet?style=flat-square)](https://github.com/poodle64/signet/releases/latest) [![Licence](https://img.shields.io/badge/Licence-MIT-blue?style=flat-square)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/) [![Release](https://img.shields.io/github/v/release/poodle64/signet?style=flat-square)](https://github.com/radar-hooves/signet/releases/latest) [![Licence](https://img.shields.io/badge/Licence-MIT-blue?style=flat-square)](LICENSE)
 
 One self-contained Go binary that gives a machine a hardware-rooted signing identity and trades a signed challenge for a short-lived bearer token — on whichever secure hardware the host has.
 
@@ -31,12 +31,12 @@ This is the same pattern AWS ships as IAM Roles Anywhere, generalised across the
 ## Installation
 
 ```sh
-brew install poodle64/tap/signet
+brew install radar-hooves/tap/signet
 ```
 
 For Nix (home-manager / nix-darwin), a `fetchurl` + SRI derivation lives in [`nix/signet.nix`](nix/signet.nix); copy it into your config and add it to `home.packages`.
 
-To install manually, download the per-platform tarball and checksum from the [latest release](https://github.com/poodle64/signet/releases/latest), verify, and put the binary on your `PATH`:
+To install manually, download the per-platform tarball and checksum from the [latest release](https://github.com/radar-hooves/signet/releases/latest), verify, and put the binary on your `PATH`:
 
 ```sh
 shasum -a 256 -c signet-*-*.tar.gz.sha256
@@ -173,6 +173,6 @@ make test        # runs the test suite
 <div align="center">
 <sub>
 The key that proves which machine you are; sealed in hardware, exportable to no one.<br>
-<a href="LICENSE">MIT Licence</a> · <a href="https://github.com/poodle64/signet/issues">Report Bug</a> · <a href="SECURITY.md">Security</a>
+<a href="LICENSE">MIT Licence</a> · <a href="https://github.com/radar-hooves/signet/issues">Report Bug</a> · <a href="SECURITY.md">Security</a>
 </sub>
 </div>

@@ -1,4 +1,4 @@
-module github.com/poodle64/signet
+module github.com/radar-hooves/signet
 
 go 1.25.0
 

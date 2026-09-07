@@ -45,7 +45,7 @@ let
   };
 
   src = fetchurl {
-    url = "https://github.com/poodle64/signet/releases/download/v${version}/signet-${version}-${artifactSuffix}.tar.gz";
+    url = "https://github.com/radar-hooves/signet/releases/download/v${version}/signet-${version}-${artifactSuffix}.tar.gz";
     hash = hashes.${artifactSuffix};
   };
 in
@@ -66,7 +66,7 @@ stdenv.mkDerivation {
 
   meta = {
     description = "Single Go binary for hardware-rooted machine identity; TPM, PIV, and Secure Enclave backends all work on the unsigned release binary";
-    homepage = "https://github.com/poodle64/signet";
+    homepage = "https://github.com/radar-hooves/signet";
     license = lib.licenses.mit;
     platforms = [
       "aarch64-darwin"

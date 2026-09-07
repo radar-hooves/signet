@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // stubSigner is a hardware-free Signer for the agent tests. It tags its outputs

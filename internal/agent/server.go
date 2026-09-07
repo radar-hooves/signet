@@ -13,7 +13,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // parseBind splits a "<socket>=<slot>" binding. The separator is the last '='

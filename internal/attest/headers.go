@@ -14,7 +14,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // Typed exit codes for signet headers. The first five values match Verify's

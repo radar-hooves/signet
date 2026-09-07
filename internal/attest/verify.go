@@ -14,7 +14,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // Typed exit codes for signet verify. Each maps to a distinct failure mode so

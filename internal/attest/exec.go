@@ -30,7 +30,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // Typed exit codes for signet exec. The first five values match Headers' and

@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/poodle64/signet/internal/attest"
+	"github.com/radar-hooves/signet/internal/attest"
 )
 
 // runExec parses exec's flags and calls attest.Exec, returning the typed

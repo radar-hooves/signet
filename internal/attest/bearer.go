@@ -20,7 +20,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // renewWindow is how close to expiry a cached bearer is renewed rather than

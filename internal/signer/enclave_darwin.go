@@ -49,7 +49,7 @@ import (
 	"path/filepath"
 	"unsafe"
 
-	"github.com/poodle64/signet/internal/datadir"
+	"github.com/radar-hooves/signet/internal/datadir"
 )
 
 // seDefaultTag identifies the SE signing key; it names the on-disk blob file so

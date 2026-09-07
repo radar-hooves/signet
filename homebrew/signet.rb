@@ -1,7 +1,7 @@
 # Canonical Homebrew formula for signet, the cross-platform Go binary for
 # hardware-rooted machine identity. This is the source of truth; copy it into the
-# Homebrew tap repo (poodle64/homebrew-tap, as `Formula/signet.rb`) so users can
-# `brew install poodle64/tap/signet`. Bump `version` and the sha256s when a new
+# Homebrew tap repo (radar-hooves/homebrew-tap, as `Formula/signet.rb`) so users can
+# `brew install radar-hooves/tap/signet`. Bump `version` and the sha256s when a new
 # signet release is cut (the .sha256 files are published alongside each release
 # tarball).
 #
@@ -11,13 +11,13 @@
 # touched, and no code-signing entitlement is required. All three backends work unsigned.
 class Signet < Formula
   desc "Single Go binary for hardware-rooted machine identity; TPM, PIV, and Secure Enclave all work on the unsigned release binary"
-  homepage "https://github.com/poodle64/signet"
+  homepage "https://github.com/radar-hooves/signet"
   version "2026.9.0"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/poodle64/signet/releases/download/v#{version}/signet-#{version}-darwin-arm64.tar.gz"
+      url "https://github.com/radar-hooves/signet/releases/download/v#{version}/signet-#{version}-darwin-arm64.tar.gz"
       sha256 "122e3f4990d3e826832efe8bd71496b5a566f139a6eb41512bcbf11b68df62f7"
     end
 
@@ -29,7 +29,7 @@ class Signet < Formula
 
   on_linux do
     on_intel do
-      url "https://github.com/poodle64/signet/releases/download/v#{version}/signet-#{version}-linux-amd64.tar.gz"
+      url "https://github.com/radar-hooves/signet/releases/download/v#{version}/signet-#{version}-linux-amd64.tar.gz"
       sha256 "2acf9bd76247c4e75277a4cd7d0a64d8982df9ba45710a799703ec453e9588b4"
     end
 

@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // Typed exit codes for signet vend-to-file. The first five values match

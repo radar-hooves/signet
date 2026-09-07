@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/poodle64/signet/internal/datadir"
+	"github.com/radar-hooves/signet/internal/datadir"
 )
 
 // bearerCache is the on-disk structure stored under ~/.signet/cache/.

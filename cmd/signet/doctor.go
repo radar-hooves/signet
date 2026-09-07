@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // backendProbe pairs a backend name with its availability probe.

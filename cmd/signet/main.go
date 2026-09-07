@@ -57,9 +57,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/poodle64/signet/internal/agent"
-	"github.com/poodle64/signet/internal/attest"
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/agent"
+	"github.com/radar-hooves/signet/internal/attest"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // version is overwritten at link time by -ldflags "-X main.version=<value>".

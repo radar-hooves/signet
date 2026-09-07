@@ -144,7 +144,7 @@ are not built yet; adding one is a new matrix row plus its runner.
 signet ships through a Homebrew tap, so users install with:
 
 ```sh
-brew install poodle64/tap/signet
+brew install radar-hooves/tap/signet
 ```
 
 The formula lives at `homebrew/signet.rb` in this repo and points at the

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/poodle64/signet/internal/signer"
+	"github.com/radar-hooves/signet/internal/signer"
 )
 
 // Auth is the credential-helper entry point. It resolves a bearer through the

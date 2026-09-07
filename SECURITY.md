@@ -4,7 +4,7 @@
 
 Please **do not** open a public GitHub issue for security vulnerabilities.
 
-Report privately via GitHub's built-in vulnerability reporting: **[Report a vulnerability](https://github.com/poodle64/signet/security/advisories/new)**
+Report privately via GitHub's built-in vulnerability reporting: **[Report a vulnerability](https://github.com/radar-hooves/signet/security/advisories/new)**
 
 Include in your report:
 

@@ -29,4 +29,4 @@ make test    # CGO_ENABLED=1 go test ./...
 
 ## CI deviations from the household standard
 
-- **No `auto-label-issues` caller.** `rules-library/core/ci-workflow-standard.md` permits a public repo that cannot resolve the private master-project reusable to omit the caller provided the omission is recorded. signet is public and `poodle64/master-project` is private, so labels are applied at creation time by the `/git-issue` skill instead.
+- **No `auto-label-issues` caller.** `rules-library/core/ci-workflow-standard.md` permits a public repo that cannot resolve the private master-project reusable to omit the caller provided the omission is recorded. signet is public and `radar-hooves/master-project` is private, so labels are applied at creation time by the `/git-issue` skill instead.
