@@ -4,7 +4,7 @@
 
 _The key that proves which machine you are; sealed in hardware, exportable to no one._
 
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/) [![Release](https://img.shields.io/github/v/release/poodle64/signet?style=flat-square)](https://github.com/radar-hooves/signet/releases/latest) [![Licence](https://img.shields.io/badge/Licence-MIT-blue?style=flat-square)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/) [![Release](https://img.shields.io/github/v/release/radar-hooves/signet?style=flat-square)](https://github.com/radar-hooves/signet/releases/latest) [![Licence](https://img.shields.io/badge/Licence-MIT-blue?style=flat-square)](LICENSE)
 
 One self-contained Go binary that gives a machine a hardware-rooted signing identity and trades a signed challenge for a short-lived bearer token — on whichever secure hardware the host has.
 
@@ -69,11 +69,11 @@ After `enrol`, paste the printed public key into the broker. From then on `auth`
 
 signet auto-detects the available hardware. Pass `--backend` to override.
 
-| Backend | Platform | Auto-detected? | `--backend` value |
-| --- | --- | --- | --- |
-| Apple Secure Enclave | macOS | Yes | `secure-enclave` (aliases `enclave`, `se`) |
-| TPM 2.0 | Linux, Windows | Yes (if `/dev/tpmrm0` or TBS is reachable) | `tpm` |
-| YubiKey / PIV token | macOS, Linux, Windows | Fallback on Linux/Windows | `piv` |
+| Backend              | Platform              | Auto-detected?                             | `--backend` value                          |
+| -------------------- | --------------------- | ------------------------------------------ | ------------------------------------------ |
+| Apple Secure Enclave | macOS                 | Yes                                        | `secure-enclave` (aliases `enclave`, `se`) |
+| TPM 2.0              | Linux, Windows        | Yes (if `/dev/tpmrm0` or TBS is reachable) | `tpm`                                      |
+| YubiKey / PIV token  | macOS, Linux, Windows | Fallback on Linux/Windows                  | `piv`                                      |
 
 There is no software-key fallback. A host with no secure hardware fails loudly; signet never silently degrades to a key on disk.
 
@@ -114,7 +114,7 @@ Wire `signet auth` as the `headersHelper` in a Claude Code MCP config, or as any
 
 To use a specific backend: `signet auth --backend piv https://your-broker.example.internal`
 
-`auth` prints signet's own attestation bearer: the credential that proves *this machine's* identity to the broker. Some hosted servers instead expect a **broker-vended credential**, a separate secret the broker holds on the consumer's behalf (a hosted API's bearer, an upstream service token), as their `Authorization` header. For that case wire `signet headers` instead: it attests the same way `auth` does, then vends the named credential and prints it as the header:
+`auth` prints signet's own attestation bearer: the credential that proves _this machine's_ identity to the broker. Some hosted servers instead expect a **broker-vended credential**, a separate secret the broker holds on the consumer's behalf (a hosted API's bearer, an upstream service token), as their `Authorization` header. For that case wire `signet headers` instead: it attests the same way `auth` does, then vends the named credential and prints it as the header:
 
 ```json
 {
@@ -138,7 +138,7 @@ signet vend-to-file --broker https://your-broker.example.internal example-api /e
 
 Nothing but a byte-count confirmation line ever reaches stdout; the credential value only ever lands in the destination file. See [Usage](docs/usage.md#vend-to-file) for `--field`, `--mode`, `--print-shape`, and the full exit-code reference.
 
-A **stdio** MCP server needs its credential in an environment variable *before* it even starts, and `.mcp.json` has no `envHelper` equivalent to `headersHelper`. `signet exec` closes that gap: it attests and vends the same way, sets the value as an environment variable on a child process, and replaces itself with that child, so the value goes straight from the broker into the child's own environment and never sits in the calling shell, an env var, or a file:
+A **stdio** MCP server needs its credential in an environment variable _before_ it even starts, and `.mcp.json` has no `envHelper` equivalent to `headersHelper`. `signet exec` closes that gap: it attests and vends the same way, sets the value as an environment variable on a child process, and replaces itself with that child, so the value goes straight from the broker into the child's own environment and never sits in the calling shell, an env var, or a file:
 
 ```sh
 signet exec --broker https://your-broker.example.internal --credential github-pat \
@@ -151,15 +151,15 @@ signet speaks the `/v1/attest` HTTP contract and nothing more; it is not coupled
 
 ## Documentation
 
-| Guide | What it covers |
-| --- | --- |
-| [Usage](docs/usage.md) | All ten subcommands (enrol, sign, auth, verify, headers, vend-to-file, exec, agent, doctor, version); wiring as a credential helper |
-| [Configuration](docs/configuration.md) | Flags (--backend, --slot, --identity), backend selection, and on-disk paths |
-| [Hardware backends](docs/backends.md) | The Secure Enclave, TPM, and PIV backends in depth |
-| [Building from source](docs/development/building.md) | The cgo build, the Swift shim, and the release toolchain |
-| [Contributing](CONTRIBUTING.md) | Build prerequisites, per-platform constraints, test commands |
-| [Security](SECURITY.md) | Reporting vulnerabilities and supported versions |
-| Brand assets | [`docs/branding/`](docs/branding/) |
+| Guide                                                | What it covers                                                                                                                      |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [Usage](docs/usage.md)                               | All ten subcommands (enrol, sign, auth, verify, headers, vend-to-file, exec, agent, doctor, version); wiring as a credential helper |
+| [Configuration](docs/configuration.md)               | Flags (--backend, --slot, --identity), backend selection, and on-disk paths                                                         |
+| [Hardware backends](docs/backends.md)                | The Secure Enclave, TPM, and PIV backends in depth                                                                                  |
+| [Building from source](docs/development/building.md) | The cgo build, the Swift shim, and the release toolchain                                                                            |
+| [Contributing](CONTRIBUTING.md)                      | Build prerequisites, per-platform constraints, test commands                                                                        |
+| [Security](SECURITY.md)                              | Reporting vulnerabilities and supported versions                                                                                    |
+| Brand assets                                         | [`docs/branding/`](docs/branding/)                                                                                                  |
 
 ## Contributing
 
