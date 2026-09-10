@@ -80,20 +80,74 @@ func TestExec_CredOutOfScope(t *testing.T) {
 	}
 }
 
-// TestExec_CredNotFound verifies exit code 5 when the broker returns 404 on
-// the credential vend endpoint.
-func TestExec_CredNotFound(t *testing.T) {
-	setTempHome(t)
-	srv := headersBrokerWithCredBody(t, http.StatusNotFound, "")
-	defer srv.Close()
-
-	s := &stubSigner{sig: "c3R1YnNpZw=="}
-	code, err := Exec(s, srv.URL, "my-cred", "MY_TOKEN", "", []string{"true"})
-	if err != nil {
-		t.Fatalf("Exec: unexpected non-nil error for typed exit: %v", err)
+// TestExec_VendFailureClasses table-drives every non-2xx credential-vend
+// status exec must classify distinctly, mirroring
+// TestHeaders_VendFailureClasses (radar-hooves/mcp-servers#868): a locked
+// vault (423) must never be reported as "not found in catalogue".
+func TestExec_VendFailureClasses(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       int
+		body         string
+		wantCode     int
+		wantStderr   []string
+		refuseStderr []string
+	}{
+		{
+			name:       "404 not found",
+			status:     http.StatusNotFound,
+			wantCode:   ExitExecCredNotFound,
+			wantStderr: []string{`credential "my-cred" not found in catalogue (404)`},
+		},
+		{
+			name:         "423 locked",
+			status:       http.StatusLocked,
+			body:         `{"error":"locked","detail":"the vault is locked, unseal it first"}`,
+			wantCode:     ExitExecVaultLocked,
+			wantStderr:   []string{"423", "vault is locked", "the vault is locked, unseal it first"},
+			refuseStderr: []string{"not found in catalogue"},
+		},
+		{
+			name:         "500 internal error",
+			status:       http.StatusInternalServerError,
+			body:         `{"error":"internal","detail":"database unreachable"}`,
+			wantCode:     ExitExecBrokerError,
+			wantStderr:   []string{"500", "database unreachable"},
+			refuseStderr: []string{"not found in catalogue", "vault is locked"},
+		},
 	}
-	if code != ExitExecCredNotFound {
-		t.Errorf("exit code = %d, want %d (ExitExecCredNotFound)", code, ExitExecCredNotFound)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setTempHome(t)
+			srv := headersBrokerWithCredBody(t, tc.status, tc.body)
+			defer srv.Close()
+
+			s := &stubSigner{sig: "c3R1YnNpZw=="}
+			var code int
+			var err error
+			stdout, stderr := captureHeadersOutput(t, func() {
+				code, err = Exec(s, srv.URL, "my-cred", "MY_TOKEN", "", []string{"true"})
+			})
+			if err != nil {
+				t.Fatalf("Exec: unexpected non-nil error for typed exit: %v", err)
+			}
+			if code != tc.wantCode {
+				t.Errorf("exit code = %d, want %d", code, tc.wantCode)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty on failure (no partial print, and stdout belongs to the child)", stdout)
+			}
+			for _, want := range tc.wantStderr {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+				}
+			}
+			for _, refuse := range tc.refuseStderr {
+				if strings.Contains(stderr, refuse) {
+					t.Errorf("stderr = %q, must not contain %q", stderr, refuse)
+				}
+			}
+		})
 	}
 }
 

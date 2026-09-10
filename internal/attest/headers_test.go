@@ -484,20 +484,77 @@ func TestHeaders_CredOutOfScope(t *testing.T) {
 	}
 }
 
-// TestHeaders_CredNotFound verifies exit code 5 when the broker returns 404
-// on the credential vend endpoint.
-func TestHeaders_CredNotFound(t *testing.T) {
-	setTempHome(t)
-	srv := headersBrokerWithCredBody(t, http.StatusNotFound, "")
-	defer srv.Close()
-
-	s := &stubSigner{sig: "c3R1YnNpZw=="}
-	code, err := Headers(s, srv.URL, "my-cred", "Authorization", "bearer", false)
-	if err != nil {
-		t.Fatalf("Headers: unexpected non-nil error for typed exit: %v", err)
+// TestHeaders_VendFailureClasses table-drives every non-2xx credential-vend
+// status headers must classify distinctly, pinned against
+// radar-hooves/mcp-servers#868: a locked vault (423) was read through the
+// 404 branch and printed "credential %q not found in catalogue (404)",
+// sending the reader hunting a catalogue the broker had never even
+// consulted — verify, hitting the same locked broker, correctly reported
+// "unexpected broker 423".
+func TestHeaders_VendFailureClasses(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       int
+		body         string
+		wantCode     int
+		wantStderr   []string
+		refuseStderr []string
+	}{
+		{
+			name:       "404 not found",
+			status:     http.StatusNotFound,
+			wantCode:   ExitHeadersCredNotFound,
+			wantStderr: []string{`credential "my-cred" not found in catalogue (404)`},
+		},
+		{
+			name:         "423 locked",
+			status:       http.StatusLocked,
+			body:         `{"error":"locked","detail":"the vault is locked, unseal it first"}`,
+			wantCode:     ExitHeadersVaultLocked,
+			wantStderr:   []string{"423", "vault is locked", "the vault is locked, unseal it first"},
+			refuseStderr: []string{"not found in catalogue"},
+		},
+		{
+			name:         "500 internal error",
+			status:       http.StatusInternalServerError,
+			body:         `{"error":"internal","detail":"database unreachable"}`,
+			wantCode:     ExitHeadersBrokerError,
+			wantStderr:   []string{"500", "database unreachable"},
+			refuseStderr: []string{"not found in catalogue", "vault is locked"},
+		},
 	}
-	if code != ExitHeadersCredNotFound {
-		t.Errorf("exit code = %d, want %d (ExitHeadersCredNotFound)", code, ExitHeadersCredNotFound)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setTempHome(t)
+			srv := headersBrokerWithCredBody(t, tc.status, tc.body)
+			defer srv.Close()
+
+			s := &stubSigner{sig: "c3R1YnNpZw=="}
+			var code int
+			var err error
+			stdout, stderr := captureHeadersOutput(t, func() {
+				code, err = Headers(s, srv.URL, "my-cred", "Authorization", "bearer", false)
+			})
+			if err != nil {
+				t.Fatalf("Headers: unexpected non-nil error for typed exit: %v", err)
+			}
+			if code != tc.wantCode {
+				t.Errorf("exit code = %d, want %d", code, tc.wantCode)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty on failure", stdout)
+			}
+			for _, want := range tc.wantStderr {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+				}
+			}
+			for _, refuse := range tc.refuseStderr {
+				if strings.Contains(stderr, refuse) {
+					t.Errorf("stderr = %q, must not contain %q", stderr, refuse)
+				}
+			}
+		})
 	}
 }
 

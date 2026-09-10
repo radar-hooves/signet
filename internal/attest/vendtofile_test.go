@@ -312,24 +312,79 @@ func TestVendToFile_CredOutOfScope(t *testing.T) {
 	}
 }
 
-// TestVendToFile_CredNotFound verifies exit code 5 and an absent dest when
-// the broker returns 404 on the credential vend endpoint.
-func TestVendToFile_CredNotFound(t *testing.T) {
-	setTempHome(t)
-	srv := headersBrokerWithCredBody(t, http.StatusNotFound, "")
-	defer srv.Close()
+// TestVendToFile_VendFailureClasses table-drives every non-2xx
+// credential-vend status vend-to-file must classify distinctly, mirroring
+// TestHeaders_VendFailureClasses (radar-hooves/mcp-servers#868): a locked
+// vault (423) must never be reported as "not found in catalogue", and dest
+// must stay absent on every one of these failures.
+func TestVendToFile_VendFailureClasses(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       int
+		body         string
+		wantCode     int
+		wantStderr   []string
+		refuseStderr []string
+	}{
+		{
+			name:       "404 not found",
+			status:     http.StatusNotFound,
+			wantCode:   ExitVendToFileCredNotFound,
+			wantStderr: []string{`credential "my-cred" not found in catalogue (404)`},
+		},
+		{
+			name:         "423 locked",
+			status:       http.StatusLocked,
+			body:         `{"error":"locked","detail":"the vault is locked, unseal it first"}`,
+			wantCode:     ExitVendToFileVaultLocked,
+			wantStderr:   []string{"423", "vault is locked", "the vault is locked, unseal it first"},
+			refuseStderr: []string{"not found in catalogue"},
+		},
+		{
+			name:         "500 internal error",
+			status:       http.StatusInternalServerError,
+			body:         `{"error":"internal","detail":"database unreachable"}`,
+			wantCode:     ExitVendToFileBrokerError,
+			wantStderr:   []string{"500", "database unreachable"},
+			refuseStderr: []string{"not found in catalogue", "vault is locked"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setTempHome(t)
+			srv := headersBrokerWithCredBody(t, tc.status, tc.body)
+			defer srv.Close()
 
-	dest := filepath.Join(t.TempDir(), "dest.txt")
-	s := &stubSigner{sig: "c3R1YnNpZw=="}
-	code, err := VendToFile(s, srv.URL, "my-cred", dest, "", 0o600, false)
-	if err != nil {
-		t.Fatalf("VendToFile: unexpected non-nil error for typed exit: %v", err)
-	}
-	if code != ExitVendToFileCredNotFound {
-		t.Errorf("exit code = %d, want %d (ExitVendToFileCredNotFound)", code, ExitVendToFileCredNotFound)
-	}
-	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
-		t.Errorf("dest must not be created on failure; stat error = %v", statErr)
+			dest := filepath.Join(t.TempDir(), "dest.txt")
+			s := &stubSigner{sig: "c3R1YnNpZw=="}
+			var code int
+			var err error
+			stdout, stderr := captureHeadersOutput(t, func() {
+				code, err = VendToFile(s, srv.URL, "my-cred", dest, "", 0o600, false)
+			})
+			if err != nil {
+				t.Fatalf("VendToFile: unexpected non-nil error for typed exit: %v", err)
+			}
+			if code != tc.wantCode {
+				t.Errorf("exit code = %d, want %d", code, tc.wantCode)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty on failure", stdout)
+			}
+			if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+				t.Errorf("dest must not be created on failure; stat error = %v", statErr)
+			}
+			for _, want := range tc.wantStderr {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+				}
+			}
+			for _, refuse := range tc.refuseStderr {
+				if strings.Contains(stderr, refuse) {
+					t.Errorf("stderr = %q, must not contain %q", stderr, refuse)
+				}
+			}
+		})
 	}
 }
 

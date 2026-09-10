@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -26,7 +25,9 @@ import (
 // "cannot resolve this material to one field's value" case: an envelope that
 // did not parse, an ambiguous multi-field static credential with no --field,
 // a --field naming a field that is not present, a session credential with no
-// access_token, or any other material kind.
+// access_token, or any other material kind. ExitVendToFileVaultLocked and
+// ExitVendToFileBrokerError match Headers' codes of the same name and number
+// (7 and 8): both commands share the same const layout up to this point.
 const (
 	// ExitVendToFileOK is success: the file was written (or, with
 	// --print-shape, the shape was printed) and the caller printed the one
@@ -45,6 +46,14 @@ const (
 	// ExitVendToFileUnusableMaterial means the vended credential cannot be
 	// resolved to a single value to write: see the const block doc above.
 	ExitVendToFileUnusableMaterial = 6
+	// ExitVendToFileVaultLocked means the broker's vault is locked (broker
+	// returned 423); catalogue membership is unknown, and this must never be
+	// reported as ExitVendToFileCredNotFound (radar-hooves/mcp-servers#868).
+	ExitVendToFileVaultLocked = 7
+	// ExitVendToFileBrokerError means the broker answered the vend with a
+	// non-2xx status this package has no dedicated wording for (400, 500,
+	// ...); the message names the status and the broker's own error/detail.
+	ExitVendToFileBrokerError = 8
 )
 
 // VendToFile is the vend-to-file entry point. It:
@@ -99,16 +108,21 @@ func VendToFile(s signer.Signer, brokerURL, credName, dest, field string, mode o
 		fmt.Fprintf(os.Stderr, "signet vend-to-file: network error: %v\n", getErr)
 		return 1, getErr
 	}
-	switch {
-	case status == http.StatusForbidden:
-		fmt.Fprintf(os.Stderr, "signet vend-to-file: credential %q out of scope for this identity (403)\n", credName)
-		return ExitVendToFileCredOutOfScope, nil
-	case status == http.StatusNotFound:
-		fmt.Fprintf(os.Stderr, "signet vend-to-file: credential %q not found in catalogue (404)\n", credName)
-		return ExitVendToFileCredNotFound, nil
-	case status < 200 || status >= 300:
-		fmt.Fprintf(os.Stderr, "signet vend-to-file: unexpected broker %d vending credential %q\n", status, credName)
-		return 1, fmt.Errorf("unexpected broker %d on credential vend", status)
+	if status < 200 || status >= 300 {
+		switch classifyVend(status) {
+		case vendOutOfScope:
+			fmt.Fprintf(os.Stderr, "signet vend-to-file: credential %q out of scope for this identity (403)\n", credName)
+			return ExitVendToFileCredOutOfScope, nil
+		case vendNotFound:
+			fmt.Fprintf(os.Stderr, "signet vend-to-file: credential %q not found in catalogue (404)\n", credName)
+			return ExitVendToFileCredNotFound, nil
+		case vendLocked:
+			fmt.Fprintf(os.Stderr, "signet vend-to-file: broker vault is locked (423): %s\n", vendBrokerDetail(body))
+			return ExitVendToFileVaultLocked, nil
+		default:
+			fmt.Fprintf(os.Stderr, "signet vend-to-file: unexpected broker %d vending credential %q: %s\n", status, credName, vendBrokerDetail(body))
+			return ExitVendToFileBrokerError, nil
+		}
 	}
 
 	// Step 4: parse the envelope.

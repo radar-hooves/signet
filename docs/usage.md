@@ -119,14 +119,14 @@ signet verify --broker <url> [--credential <name>] [--backend <backend>] [--iden
 
 `verify` prints a short diagnostic table to stdout and exits with a typed exit code:
 
-| Code | Meaning |
-| --- | --- |
-| `0` | Success: attestation accepted; credential resolvable (if `--credential` given). |
-| `1` | Unexpected transport or argument error. |
-| `2` | Key missing: no key enrolled for this identity and backend. |
-| `3` | Attestation rejected: the broker answered and refused this key (4xx) — a local enrolment problem (wrong or unenrolled identity), not a broker outage. |
-| `4` | Credential out of scope: the identity is attested but the credential is not in its vend scope (403). |
-| `5` | Credential not found: the credential name is absent from the broker's catalogue (404). |
+| Code | Meaning                                                                                                                                               |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success: attestation accepted; credential resolvable (if `--credential` given).                                                                       |
+| `1`  | Unexpected transport or argument error.                                                                                                               |
+| `2`  | Key missing: no key enrolled for this identity and backend.                                                                                           |
+| `3`  | Attestation rejected: the broker answered and refused this key (4xx) — a local enrolment problem (wrong or unenrolled identity), not a broker outage. |
+| `4`  | Credential out of scope: the identity is attested but the credential is not in its vend scope (403).                                                  |
+| `5`  | Credential not found: the credential name is absent from the broker's catalogue (404).                                                                |
 
 Example output (successful attestation, credential probed):
 
@@ -154,38 +154,42 @@ signet verify — broker: https://broker.example.internal
 signet headers --broker <url> --credential <name> [--header <name>] [--format bearer|raw] [--bare] [--backend <backend>] [--identity <name>] [--agent <socket>]
 ```
 
-`headers` is the vend-to-headers credential helper: it runs the same attestation round-trip as `verify`, then vends `--credential` from the broker and prints it — by default as a compact JSON HTTP header line, the shape a `.mcp.json` `headersHelper` (or any `credential_process`-style consumer) captures directly. Unlike `verify`, which only probes whether a credential *would* resolve, `headers` returns the credential's actual value, so it is not a diagnostic; it is the header-producing call itself.
+`headers` is the vend-to-headers credential helper: it runs the same attestation round-trip as `verify`, then vends `--credential` from the broker and prints it — by default as a compact JSON HTTP header line, the shape a `.mcp.json` `headersHelper` (or any `credential_process`-style consumer) captures directly. Unlike `verify`, which only probes whether a credential _would_ resolve, `headers` returns the credential's actual value, so it is not a diagnostic; it is the header-producing call itself.
 
 The vended credential must resolve to a single-field static value: `material.kind` must be `static`, and `material.fields` must hold exactly one field. A `session` credential, or a static credential with zero or more than one field, is a typed refusal rather than a guess at which field to print — `headers` never chooses on the caller's behalf.
 
 Two independent flags shape the output. `--format` shapes the **value**: `bearer` (default) emits `Bearer <value>`, `raw` emits `<value>` alone. `--bare` shapes the **framing**: without it (default) the value is wrapped in a compact-JSON object keyed by `--header` (default `Authorization`); with it, the value is printed alone. They compose:
 
-| Flags | stdout |
-| --- | --- |
-| *(default)* | `{"Authorization":"Bearer s3cr3t"}` |
-| `--format raw` | `{"Authorization":"s3cr3t"}` |
-| `--bare` | `Bearer s3cr3t` |
-| `--bare --format raw` | `s3cr3t` |
+| Flags                 | stdout                              |
+| --------------------- | ----------------------------------- |
+| _(default)_           | `{"Authorization":"Bearer s3cr3t"}` |
+| `--format raw`        | `{"Authorization":"s3cr3t"}`        |
+| `--bare`              | `Bearer s3cr3t`                     |
+| `--bare --format raw` | `s3cr3t`                            |
 
-The JSON framings are the `headersHelper` contract and remain the default. Reach for `--bare` when interpolating into a shell command: a JSON-wrapped value substituted into `curl -H "Authorization: Bearer $v"` builds a **malformed header**, and the server rejects it with a 401 or 403 that is indistinguishable from a stale or revoked credential. Note that `--format raw` alone does *not* do this — it removes the `Bearer ` prefix but keeps the JSON object; `--bare` is the flag that removes the framing.
+The JSON framings are the `headersHelper` contract and remain the default. Reach for `--bare` when interpolating into a shell command: a JSON-wrapped value substituted into `curl -H "Authorization: Bearer $v"` builds a **malformed header**, and the server rejects it with a 401 or 403 that is indistinguishable from a stale or revoked credential. Note that `--format raw` alone does _not_ do this — it removes the `Bearer ` prefix but keeps the JSON object; `--bare` is the flag that removes the framing.
 
 `--header` names the JSON key, so it has no meaning under `--bare` (which prints no key). Combining them is refused rather than silently ignored.
 
 Under `--bare` only, a credential whose value contains a carriage return, newline, or NUL byte is refused as unusable material (exit `6`) rather than printed. `--bare` is the one output path with no escaping, and it exists to be interpolated into a header unquoted, so an embedded CRLF would be a header-injection vector and an embedded newline would break the single-line output `--bare` promises; no HTTP field value may contain these in any case. The default JSON framing escapes such a value instead, and is unchanged.
 
-The credential value only ever lands on stdout, as the one line `headers` prints on success. Every diagnostic and every failure message goes to stderr instead, and never contains the credential value or the minted attestation bearer: on failure the message names only the failure class (key missing, broker rejection, out of scope, not found, or the shape of the unusable material), so a `headersHelper` invocation that fails never leaks a secret into a log capturing stderr.
+The credential value only ever lands on stdout, as the one line `headers` prints on success. Every diagnostic and every failure message goes to stderr instead, and never contains the credential value or the minted attestation bearer: on failure the message names only the failure class (key missing, broker rejection, out of scope, not found, vault locked, unexpected broker error, or the shape of the unusable material), so a `headersHelper` invocation that fails never leaks a secret into a log capturing stderr.
+
+A locked vault (423) is its own class, distinct from "not found": nothing about the credential's existence is known while the vault is locked, so reporting it as a 404 sends the reader hunting a catalogue the broker never even consulted (radar-hooves/mcp-servers#868). Any other non-2xx status prints the raw status and the broker's own `error`/`detail` fields (falling back to the raw body when the response is not that shape).
 
 `headers` exits with a typed code:
 
-| Code | Meaning |
-| --- | --- |
-| `0` | Success: the header line was printed to stdout. |
-| `1` | Unexpected transport or argument error. |
-| `2` | Key missing: no key enrolled for this identity and backend. |
-| `3` | Attestation rejected: the broker refused the attestation (4xx). |
-| `4` | Credential out of scope: the identity is attested but the credential is not in its vend scope (403). |
-| `5` | Credential not found: the credential name is absent from the broker's catalogue (404). |
-| `6` | Unusable material: the credential is not a single-field static value. |
+| Code | Meaning                                                                                              |
+| ---- | ---------------------------------------------------------------------------------------------------- |
+| `0`  | Success: the header line was printed to stdout.                                                      |
+| `1`  | Unexpected transport or argument error.                                                              |
+| `2`  | Key missing: no key enrolled for this identity and backend.                                          |
+| `3`  | Attestation rejected: the broker refused the attestation (4xx).                                      |
+| `4`  | Credential out of scope: the identity is attested but the credential is not in its vend scope (403). |
+| `5`  | Credential not found: the credential name is absent from the broker's catalogue (404).               |
+| `6`  | Unusable material: the credential is not a single-field static value.                                |
+| `7`  | Vault locked: the broker's vault is locked (423) — catalogue membership is unknown.                  |
+| `8`  | Broker error: the broker answered the vend with an unexpected non-2xx status.                        |
 
 Example (a static, single-field credential named `example-api`):
 
@@ -224,26 +228,30 @@ signet vend-to-file --broker <url> [--field <name>] [--mode <octal>] [--print-sh
 
 Unlike `headers`, which only understands a single-field `static` credential, `vend-to-file` also understands `session` material:
 
-- **`static`** — the sole field's value if the credential has exactly one field; `--field <name>` selects among two or more (or overrides a single field) by exact name match. A name that does not exist, or an ambiguous multi-field credential with no `--field`, is a typed refusal that names the available field *names* — never a value.
+- **`static`** — the sole field's value if the credential has exactly one field; `--field <name>` selects among two or more (or overrides a single field) by exact name match. A name that does not exist, or an ambiguous multi-field credential with no `--field`, is a typed refusal that names the available field _names_ — never a value.
 - **`session`** — always the `access_token` field; `--field` is not consulted. A cookie-only session with no `access_token` is a typed refusal naming the gap, never a guess at which cookie to write.
 
 `--mode` sets the destination's file mode as an octal string (default `0600`). `--print-shape` prints only the credential's `kind` and field names — never a value — and writes no file; use it to see what a credential offers before choosing `--field`. `--field` is ignored when `--print-shape` is set: the shape is printed before any field is resolved, so no file is written either way.
 
 The write is atomic: a temp file is created in `<dest>`'s own directory, written, fsynced, and chmoded, then renamed over `<dest>` only once every prior step has succeeded. On any failure `<dest>` is left exactly as it was — never created, never partially written — and no temp file is left behind.
 
-The only line `vend-to-file` prints on success is a non-secret confirmation, e.g. `wrote 42 bytes to /etc/myapp/token (mode 0600)`. Every diagnostic and every failure message goes to stderr instead, and never contains the credential value or the minted attestation bearer: on failure the message names only the failure class (key missing, broker rejection, out of scope, not found, or the shape of the unusable material), so a failed run never leaks a secret into a log capturing stderr.
+The only line `vend-to-file` prints on success is a non-secret confirmation, e.g. `wrote 42 bytes to /etc/myapp/token (mode 0600)`. Every diagnostic and every failure message goes to stderr instead, and never contains the credential value or the minted attestation bearer: on failure the message names only the failure class (key missing, broker rejection, out of scope, not found, vault locked, unexpected broker error, or the shape of the unusable material), so a failed run never leaks a secret into a log capturing stderr.
+
+A locked vault (423) is its own class, distinct from "not found" (radar-hooves/mcp-servers#868); any other non-2xx status prints the raw status and the broker's own `error`/`detail` fields. `<dest>` stays untouched on every one of these, exactly as on the pre-existing failure classes.
 
 `vend-to-file` exits with a typed code:
 
-| Code | Meaning |
-| --- | --- |
-| `0` | Success: `<dest>` was written (or, with `--print-shape`, the shape was printed). |
-| `1` | Unexpected transport, argument, or filesystem error. |
-| `2` | Key missing: no key enrolled for this identity and backend. |
-| `3` | Attestation rejected: the broker refused the attestation (4xx). |
-| `4` | Credential out of scope: the identity is attested but the credential is not in its vend scope (403). |
-| `5` | Credential not found: the credential name is absent from the broker's catalogue (404). |
-| `6` | Unusable material: the credential cannot be resolved to a single field's value. |
+| Code | Meaning                                                                                              |
+| ---- | ---------------------------------------------------------------------------------------------------- |
+| `0`  | Success: `<dest>` was written (or, with `--print-shape`, the shape was printed).                     |
+| `1`  | Unexpected transport, argument, or filesystem error.                                                 |
+| `2`  | Key missing: no key enrolled for this identity and backend.                                          |
+| `3`  | Attestation rejected: the broker refused the attestation (4xx).                                      |
+| `4`  | Credential out of scope: the identity is attested but the credential is not in its vend scope (403). |
+| `5`  | Credential not found: the credential name is absent from the broker's catalogue (404).               |
+| `6`  | Unusable material: the credential cannot be resolved to a single field's value.                      |
+| `7`  | Vault locked: the broker's vault is locked (423) — catalogue membership is unknown.                  |
+| `8`  | Broker error: the broker answered the vend with an unexpected non-2xx status.                        |
 
 Example (a static, single-field credential named `example-api`, default mode):
 
@@ -275,7 +283,7 @@ signet exec --broker <url> --credential <name> --env-var <NAME> [--field <name>]
 
 `exec` runs the same attestation round-trip as `verify`, `headers`, and `vend-to-file`, then vends `--credential` from the broker, resolves one value out of it exactly the way `vend-to-file` does (see the field-resolution rules under [vend-to-file](#vend-to-file)), sets `--env-var` to that value in a **child process's** environment, and replaces the current process with `<command>` — so the value goes straight from the broker into the child's environment and never touches signet's own shell, an env var in the calling session, a file, or an LLM transcript.
 
-It exists for **stdio MCP servers** and any other child that reads a credential from its environment at start-up. `headers` solves the equivalent problem for an `http` MCP server's `headersHelper`; `vend-to-file` solves it for a consumer that reads a file; neither helps a stdio server, because Claude Code's `.mcp.json` has no `envHelper` equivalent — the credential has to be in the environment *before* the process is spawned. Without `exec`, the only option is a secret-shaped environment variable sitting in the calling session, inherited by every child process and readable by anything that can read that process's environment (e.g. `printenv`).
+It exists for **stdio MCP servers** and any other child that reads a credential from its environment at start-up. `headers` solves the equivalent problem for an `http` MCP server's `headersHelper`; `vend-to-file` solves it for a consumer that reads a file; neither helps a stdio server, because Claude Code's `.mcp.json` has no `envHelper` equivalent — the credential has to be in the environment _before_ the process is spawned. Without `exec`, the only option is a secret-shaped environment variable sitting in the calling session, inherited by every child process and readable by anything that can read that process's environment (e.g. `printenv`).
 
 The `--` terminator is required and separates signet's own flags from the child's: everything after it is `<command>`'s argv, untouched by signet's flag parser. Omitting `--`, or leaving nothing after it, is a usage error.
 
@@ -283,20 +291,22 @@ The `--` terminator is required and separates signet's own flags from the child'
 
 `syscall.Exec` has no equivalent on Windows (there is no `execve()`); `exec` still builds there, but the launch step itself fails at runtime with an ordinary transport-style error. `exec` is unix-only in practice today.
 
-Every diagnostic and every failure message goes to stderr, and never contains the credential value or the minted attestation bearer, on the same terms as `headers` and `vend-to-file`.
+Every diagnostic and every failure message goes to stderr, and never contains the credential value or the minted attestation bearer, on the same terms as `headers` and `vend-to-file`. A locked vault (423) is its own class, distinct from "not found" (radar-hooves/mcp-servers#868); any other non-2xx status prints the raw status and the broker's own `error`/`detail` fields — the child is never launched on either.
 
 `exec` exits with a typed code:
 
-| Code | Meaning |
-| --- | --- |
-| `0` | Success — never actually observed: `syscall.Exec` replaces this process, so nothing is left to return a code. |
-| `1` | Unexpected transport, argument, or exec failure. |
-| `2` | Key missing — no key enrolled for this identity and backend. |
-| `3` | Attestation rejected — the broker refused the attestation (4xx). |
-| `4` | Credential out of scope — the identity is attested but the credential is not in its vend scope (403). |
-| `5` | Credential not found — the credential name is absent from the broker's catalogue (404). |
-| `6` | Unusable material — the credential cannot be resolved to a single field's value. |
-| `7` | Command not found — `<command>` could not be resolved to an executable via `PATH`. |
+| Code | Meaning                                                                                                       |
+| ---- | ------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success — never actually observed: `syscall.Exec` replaces this process, so nothing is left to return a code. |
+| `1`  | Unexpected transport, argument, or exec failure.                                                              |
+| `2`  | Key missing — no key enrolled for this identity and backend.                                                  |
+| `3`  | Attestation rejected — the broker refused the attestation (4xx).                                              |
+| `4`  | Credential out of scope — the identity is attested but the credential is not in its vend scope (403).         |
+| `5`  | Credential not found — the credential name is absent from the broker's catalogue (404).                       |
+| `6`  | Unusable material — the credential cannot be resolved to a single field's value.                              |
+| `7`  | Command not found — `<command>` could not be resolved to an executable via `PATH`.                            |
+| `8`  | Vault locked — the broker's vault is locked (423); catalogue membership is unknown.                           |
+| `9`  | Broker error — the broker answered the vend with an unexpected non-2xx status.                                |
 
 Example — launch a stdio MCP server with a broker-vended token in its environment, without the token ever touching the calling shell:
 

@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -38,7 +37,10 @@ import (
 // attest-then-vend round trip, and the same field-resolution step as
 // vend-to-file); ExitExecCommandNotFound is the one code specific to exec,
 // covering the "argv[0] cannot be resolved to an executable" case that
-// neither sibling has to handle (they never launch a child).
+// neither sibling has to handle (they never launch a child). ExitExecVaultLocked
+// and ExitExecBrokerError mean the same thing as Headers' and VendToFile's
+// codes of the same name, just numbered one higher in each case: 7 was
+// already taken here by ExitExecCommandNotFound.
 const (
 	// ExitExecOK is defined for symmetry with the sibling commands' const
 	// blocks, but a real run never produces it: on success Exec does not
@@ -62,6 +64,14 @@ const (
 	// ExitExecCommandNotFound means argv[0] could not be resolved to an
 	// executable via exec.LookPath — the child was never launched.
 	ExitExecCommandNotFound = 7
+	// ExitExecVaultLocked means the broker's vault is locked (broker
+	// returned 423); catalogue membership is unknown, and this must never be
+	// reported as ExitExecCredNotFound (radar-hooves/mcp-servers#868).
+	ExitExecVaultLocked = 8
+	// ExitExecBrokerError means the broker answered the vend with a non-2xx
+	// status this package has no dedicated wording for (400, 500, ...); the
+	// message names the status and the broker's own error/detail.
+	ExitExecBrokerError = 9
 )
 
 // Exec is the vend-and-exec entry point. It:
@@ -169,16 +179,21 @@ func Exec(s signer.Signer, brokerURL, credName, envVar, field string, argv []str
 		fmt.Fprintf(os.Stderr, "signet exec: network error: %v\n", getErr)
 		return 1, getErr
 	}
-	switch {
-	case status == http.StatusForbidden:
-		fmt.Fprintf(os.Stderr, "signet exec: credential %q out of scope for this identity (403)\n", credName)
-		return ExitExecCredOutOfScope, nil
-	case status == http.StatusNotFound:
-		fmt.Fprintf(os.Stderr, "signet exec: credential %q not found in catalogue (404)\n", credName)
-		return ExitExecCredNotFound, nil
-	case status < 200 || status >= 300:
-		fmt.Fprintf(os.Stderr, "signet exec: unexpected broker %d vending credential %q\n", status, credName)
-		return 1, fmt.Errorf("unexpected broker %d on credential vend", status)
+	if status < 200 || status >= 300 {
+		switch classifyVend(status) {
+		case vendOutOfScope:
+			fmt.Fprintf(os.Stderr, "signet exec: credential %q out of scope for this identity (403)\n", credName)
+			return ExitExecCredOutOfScope, nil
+		case vendNotFound:
+			fmt.Fprintf(os.Stderr, "signet exec: credential %q not found in catalogue (404)\n", credName)
+			return ExitExecCredNotFound, nil
+		case vendLocked:
+			fmt.Fprintf(os.Stderr, "signet exec: broker vault is locked (423): %s\n", vendBrokerDetail(body))
+			return ExitExecVaultLocked, nil
+		default:
+			fmt.Fprintf(os.Stderr, "signet exec: unexpected broker %d vending credential %q: %s\n", status, credName, vendBrokerDetail(body))
+			return ExitExecBrokerError, nil
+		}
 	}
 
 	// Step 4: parse the envelope and resolve one value out of it.

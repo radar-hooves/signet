@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -21,7 +20,10 @@ import (
 // vocabulary exactly (this command performs the same attest-then-vend round
 // trip); ExitHeadersUnusableMaterial is the one code specific to headers,
 // covering the extra "turn the material into a single header value" step
-// verify never has to take.
+// verify never has to take. ExitHeadersVaultLocked and ExitHeadersBrokerError
+// cover the credential-vend outcomes verify only reports generically (via its
+// diagnostic table's default branch, exit 1): a typed exit lets a
+// headersHelper caller branch on "the vault is locked" without parsing text.
 const (
 	// ExitHeadersOK is success: the header line was printed to stdout.
 	ExitHeadersOK = 0
@@ -35,6 +37,14 @@ const (
 	// ExitHeadersCredNotFound means the credential name does not exist in the
 	// catalogue (broker returned 404).
 	ExitHeadersCredNotFound = 5
+	// ExitHeadersVaultLocked means the broker's vault is locked (broker
+	// returned 423); catalogue membership is unknown, and this must never be
+	// reported as ExitHeadersCredNotFound (radar-hooves/mcp-servers#868).
+	ExitHeadersVaultLocked = 7
+	// ExitHeadersBrokerError means the broker answered the vend with a
+	// non-2xx status this package has no dedicated wording for (400, 500,
+	// ...); the message names the status and the broker's own error/detail.
+	ExitHeadersBrokerError = 8
 	// ExitHeadersUnusableMaterial means the vended credential cannot become a
 	// single header value: its material is not `static`, its envelope did not
 	// parse, its static fields number zero or more than one, or (under --bare
@@ -124,16 +134,21 @@ func Headers(s signer.Signer, brokerURL, credName, headerName, format string, ba
 		fmt.Fprintf(os.Stderr, "signet headers: network error: %v\n", getErr)
 		return 1, getErr
 	}
-	switch {
-	case status == http.StatusForbidden:
-		fmt.Fprintf(os.Stderr, "signet headers: credential %q out of scope for this identity (403)\n", credName)
-		return ExitHeadersCredOutOfScope, nil
-	case status == http.StatusNotFound:
-		fmt.Fprintf(os.Stderr, "signet headers: credential %q not found in catalogue (404)\n", credName)
-		return ExitHeadersCredNotFound, nil
-	case status < 200 || status >= 300:
-		fmt.Fprintf(os.Stderr, "signet headers: unexpected broker %d vending credential %q\n", status, credName)
-		return 1, fmt.Errorf("unexpected broker %d on credential vend", status)
+	if status < 200 || status >= 300 {
+		switch classifyVend(status) {
+		case vendOutOfScope:
+			fmt.Fprintf(os.Stderr, "signet headers: credential %q out of scope for this identity (403)\n", credName)
+			return ExitHeadersCredOutOfScope, nil
+		case vendNotFound:
+			fmt.Fprintf(os.Stderr, "signet headers: credential %q not found in catalogue (404)\n", credName)
+			return ExitHeadersCredNotFound, nil
+		case vendLocked:
+			fmt.Fprintf(os.Stderr, "signet headers: broker vault is locked (423): %s\n", vendBrokerDetail(body))
+			return ExitHeadersVaultLocked, nil
+		default:
+			fmt.Fprintf(os.Stderr, "signet headers: unexpected broker %d vending credential %q: %s\n", status, credName, vendBrokerDetail(body))
+			return ExitHeadersBrokerError, nil
+		}
 	}
 
 	// Step 4: resolve the one value this header carries — a single static

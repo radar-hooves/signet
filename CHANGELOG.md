@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- `headers`, `exec`, and `vend-to-file` no longer report a locked broker vault (423) as `credential "<name>" not found in catalogue (404)`. All three folded every credential-vend status that was not 403 or 404 into a bare `unexpected broker %d`, but the 404 branch above it had no default guard, so a 423 read as "credential not found" whenever its numeric value happened to satisfy neither dedicated case first — sending the reader hunting a catalogue the broker had never even consulted, since the vault being locked means catalogue membership is unknown, not absent. `verify`, hitting the same locked broker, already reported it correctly (`unexpected broker 423: ...`) because its fallback branch prints the status and body for anything it has no dedicated wording for; the three helpers now share that shape through one classifier (`classifyVend`/`vendBrokerDetail` in the new `internal/attest/vendfailure.go`) instead of three hand-maintained copies. A locked vault is now its own typed exit (`7` for `headers`/`vend-to-file`, `8` for `exec` — `7` there is already `ExitExecCommandNotFound`), and any other non-2xx status gets a further distinct exit (`8`/`9` respectively) printing the raw status and the broker's own `error`/`detail` JSON fields rather than folding into the generic transport-error exit `1`, so a caller can branch on "the vault is locked" without parsing text. `docs/usage.md`'s exit-code tables are extended to match. Found via a foreman lane on radar-hooves/mcp-servers#868, which had gone credential-catalogue hunting on the strength of the wrong message.
+
 ## [2026.9.0] - 2026-09-01
 
 ### Fixed
