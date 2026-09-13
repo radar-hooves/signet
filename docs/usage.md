@@ -28,7 +28,7 @@ signet verify  --broker <url> [--credential <name>] [--backend <backend>] [--ide
 signet headers --broker <url> --credential <name> [--header <name>] [--format bearer|raw] [--backend <backend>] [--identity <name>]
 signet vend-to-file --broker <url> [--field <name>] [--mode <octal>] [--print-shape] [--backend <backend>] [--identity <name>] <name> <dest>
 signet exec    --broker <url> --credential <name> --env-var <NAME> [--field <name>] [--backend <backend>] [--identity <name>] -- <command> [args...]
-signet agent   --bind <socket>=<slot> [--bind ...] [--backend piv]
+signet agent   --bind <socket>=<slot-or-identity> [--bind ...] [--backend piv|tpm|secure-enclave]
 signet doctor  [--backend <backend>]
 signet version
 ```
@@ -74,12 +74,12 @@ Re-runs reuse the cache and renew the bearer as it ages: a cached token still mo
 ### agent
 
 ```text
-signet agent --bind <socket>=<slot> [--bind <socket>=<slot> ...] [--backend piv]
+signet agent --bind <socket>=<slot-or-identity> [--bind <socket>=<slot-or-identity> ...] [--backend piv|tpm|secure-enclave]
 ```
 
-`agent` is the deliberate exception to signet's otherwise daemonless model. It exists for one problem: a workload that must attest but **cannot reach the hardware at all** — a container with no pcscd socket and no path to the YubiKey. Mounting the token into that container is the wrong trade-off, so instead one trusted process owns the token and signs on request, the way `ssh-agent` holds a key and signs for clients.
+`agent` is the deliberate exception to signet's otherwise daemonless model. It exists for one problem: a workload that must attest but **cannot reach the hardware at all** — a container with no pcscd socket and no path to the YubiKey. Mounting the token into that container is the wrong trade-off, so instead one trusted process owns the hardware and signs on request, the way `ssh-agent` holds a key and signs for clients.
 
-One `agent` process serves a Unix socket per `--bind`, and each socket is pinned to one slot at start-up. A client connecting to a socket can only ever sign with **that socket's** key: the slot is never taken from the request, so a compromised client cannot attest as another identity. Because the token is single-access, all bindings share one process and hardware access is serialised. The agent answers exactly two operations — return the public key, and sign a message — and **never generates or overwrites a key**; enrolment stays a deliberate, hands-on host operation.
+One `agent` process serves a Unix socket per `--bind`, and each socket is pinned to one key at start-up: a PIV slot under `--backend piv` (e.g. `9c`), or a named `--identity` under `--backend tpm` or `secure-enclave` (e.g. `deploy`, already enrolled with `signet enrol --backend tpm --identity deploy`). A client connecting to a socket can only ever sign with **that socket's** key: the key is never taken from the request, so a compromised client cannot attest as another identity. Hardware access is serialised across all bindings in the process (needed for a single-access token like a YubiKey; harmless overhead for a TPM or the Enclave). The agent answers exactly two operations — return the public key, and sign a message — and **never generates or overwrites a key**; enrolment stays a deliberate, hands-on host operation, so signing against a never-enrolled identity is refused rather than silently created.
 
 A client reaches the agent with `--agent <socket>` on `sign`, `enrol`, or `auth`:
 
