@@ -98,23 +98,6 @@ func (e *enclaveSigner) blobPath() (string, error) {
 	return filepath.Join(base, "se-"+safeFilename(e.tag)+".key"), nil
 }
 
-// safeFilename reduces an arbitrary tag to a filesystem-safe component.
-func safeFilename(s string) string {
-	out := make([]rune, 0, len(s))
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
-			out = append(out, r)
-		default:
-			out = append(out, '_')
-		}
-	}
-	if len(out) == 0 {
-		return "default"
-	}
-	return string(out)
-}
-
 func (e *enclaveSigner) Enrol(userPresence bool) (string, error) {
 	if !seAvailable() {
 		return "", fmt.Errorf("secure-enclave: not available on this Mac (needs Apple Silicon or a T2 chip)")
@@ -140,7 +123,7 @@ func (e *enclaveSigner) Enrol(userPresence bool) (string, error) {
 		return "", err
 	}
 	if err := writeKeyBlob(path, blob); err != nil {
-		return "", err
+		return "", fmt.Errorf("secure-enclave: write key blob: %w", err)
 	}
 	return marshalSPKI(x963)
 }
@@ -258,23 +241,6 @@ func marshalSPKI(x963 []byte) (string, error) {
 		return "", fmt.Errorf("secure-enclave: marshal SPKI: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(spki), nil
-}
-
-// writeKeyBlob persists the wrapped key blob (0600) under a 0700 directory,
-// writing to a temp file then renaming for atomicity.
-func writeKeyBlob(path string, blob []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("secure-enclave: create key directory: %w", err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, blob, 0o600); err != nil {
-		return fmt.Errorf("secure-enclave: write key blob: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("secure-enclave: finalise key blob: %w", err)
-	}
-	return nil
 }
 
 // cString reads a NUL-terminated message out of a C error buffer.

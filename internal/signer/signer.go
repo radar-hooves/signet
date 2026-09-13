@@ -12,7 +12,12 @@
 //     file, not the keychain, so no code-signing entitlement is required.
 //
 //   - tpm: TPM 2.0 via github.com/google/go-tpm (pure Go). Auto-selected on
-//     Linux and Windows when a TPM resource manager device is reachable.
+//     Linux and Windows when a TPM resource manager device is reachable. The
+//     default identity stays at the original fixed persistent handle
+//     (backward-compatible with an already-enrolled host); a named --identity
+//     gets its own TPM-wrapped key blob under ~/.signet, loadable only by this
+//     TPM — one machine, several consumers, the way Secure Enclave already
+//     works.
 //
 //   - piv: YubiKey PIV, cgo against PC/SC. Auto-selected as the fallback on
 //     any platform when no higher-priority backend is available. The slot is
@@ -44,7 +49,7 @@ type Signer interface {
 // New selects a backend from an explicit name (empty → auto-detect).
 // Auto-detect order: darwin → secure-enclave; linux/windows → tpm (if device
 // reachable) then piv; other → piv. slot applies to the piv backend, identity
-// to secure-enclave; each is ignored by the other backends.
+// to secure-enclave and tpm; each is ignored by the other backends.
 func New(backend, slot, identity string) (Signer, error) {
 	if backend == "" {
 		backend = autoDetect()
@@ -53,7 +58,7 @@ func New(backend, slot, identity string) (Signer, error) {
 	case "secure-enclave", "enclave", "se":
 		return newEnclaveSigner(identity), nil
 	case "tpm":
-		return &tpmSigner{}, nil
+		return newTPMSigner(identity), nil
 	case "piv":
 		return newPIVSigner(slot)
 	default:

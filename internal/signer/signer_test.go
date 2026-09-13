@@ -19,6 +19,33 @@ func TestNew_BackendOverride_TPM(t *testing.T) {
 	}
 }
 
+// TestNew_TPM_IdentityDefault verifies --identity resolution for tpm: an
+// omitted identity and an explicit "consumer" both resolve to
+// tpmDefaultIdentity (the legacy fixed-handle key), and a named identity is
+// carried through unchanged — no hardware touched, construction only.
+func TestNew_TPM_IdentityDefault(t *testing.T) {
+	for _, tc := range []struct {
+		identity string
+		want     string
+	}{
+		{"", tpmDefaultIdentity},
+		{"consumer", tpmDefaultIdentity},
+		{"deploy", "deploy"},
+	} {
+		s, err := New("tpm", "", tc.identity)
+		if err != nil {
+			t.Fatalf("New(tpm, identity=%q): %v", tc.identity, err)
+		}
+		tpm, ok := s.(*tpmSigner)
+		if !ok {
+			t.Fatalf("New(tpm) type = %T, want *tpmSigner", s)
+		}
+		if tpm.identity != tc.want {
+			t.Errorf("identity %q resolved to %q, want %q", tc.identity, tpm.identity, tc.want)
+		}
+	}
+}
+
 // TestNew_BackendOverride_PIV verifies the piv name returns a *pivSigner
 // (slot construction only; no hardware touched).
 func TestNew_BackendOverride_PIV(t *testing.T) {
