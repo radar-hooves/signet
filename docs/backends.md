@@ -9,7 +9,7 @@ For how a backend is chosen and the on-disk paths each writes, see [configuratio
 | Backend | Library | OS | Build-tagged? | Persists | Status |
 | --- | --- | --- | --- | --- | --- |
 | **Secure Enclave** | CryptoKit/Swift shim via cgo | macOS | Yes (`//go:build darwin`) | An opaque, hardware-wrapped key blob at `~/.signet/se-<identity>.key` | Proven end-to-end on an unsigned ad-hoc binary (enrol + sign + verify). |
-| **TPM 2.0** | `github.com/google/go-tpm` (pure Go) | Linux, Windows | No | Nothing on disk (key at a fixed TPM handle) | Proven end-to-end against the go-tpm software simulator (enrol + sign + verify). |
+| **TPM 2.0** | `github.com/google/go-tpm` (pure Go) | Linux, Windows | No | Default identity: nothing on disk (key at a fixed TPM handle). Named identity: an opaque, TPM-wrapped key blob at `~/.signet/tpm-<identity>.key` | Proven end-to-end against the go-tpm software simulator (enrol + sign + verify; two named identities enrol distinct keys and cross-verify correctly). |
 | **YubiKey / PIV** (slot 9c) | `github.com/go-piv/piv-go/v2` (cgo, PC/SC) | macOS, Linux, Windows | No | Nothing on disk (key on the token) | Builds and format-verified; real-hardware validation pending a physical key. |
 
 Only the Secure Enclave backend sits behind a build tag, because it links a macOS-only Swift shim; TPM and PIV compile on every platform.
@@ -24,9 +24,19 @@ The keychain is never touched. Because the keychain is bypassed, **no `com.apple
 
 ## TPM 2.0 (Linux/Windows)
 
-The TPM backend is pure Go (`go-tpm`), so it cross-compiles freely and links no C. The signing key lives at a fixed persistent handle (`0x81010001`, in the owner hierarchy) inside the TPM; nothing is written to disk. On Linux, signet opens the resource-manager device `/dev/tpmrm0`, falling back to the raw device `/dev/tpm0` if the resource manager is unavailable. On Windows it reaches the TPM through TBS (the TPM Base Services).
+The TPM backend is pure Go (`go-tpm`), so it cross-compiles freely and links no C. On Linux, signet opens the resource-manager device `/dev/tpmrm0`, falling back to the raw device `/dev/tpm0` if the resource manager is unavailable. On Windows it reaches the TPM through TBS (the TPM Base Services).
 
 This is the auto-detected backend on Linux and Windows whenever a TPM device is reachable; if none is, signet falls back to PIV.
+
+### Identity model: one fixed key, plus one blob per named identity
+
+The **default identity** (`consumer` — an omitted `--identity`, or the value `consumer` given explicitly) is unchanged from before named identities existed: an ECDSA P-256 key lives at the fixed persistent handle `0x81010001` (owner hierarchy), and nothing is written to disk. This is the identity every already-enrolled TPM host has; the fix for [#12](https://github.com/radar-hooves/signet/issues/12) never touches it, so an enrolled host is not broken by upgrading.
+
+**Any other `--identity`** gets its own key, born under a deterministic ECC storage primary (`tpm2.ECCSRKTemplate`, the TCG reference template — `CreatePrimary` reproduces the bit-identical key on the same TPM every time, given the same template and an unchanged owner-hierarchy seed, so there is nothing to persist for it) via `TPM2_Create`. `TPM2_Create` returns the new key already wrapped — encrypted under that primary — so the blob signet writes to `~/.signet/tpm-<identity>.key` (`0600` under a `0700` directory, matching the Secure Enclave convention exactly) is opaque and loadable, via `TPM2_Load`, only by re-deriving the same primary on the _same_ TPM. The private key is never in the clear outside the TPM at any point: `Load` decrypts it into the TPM's own protected memory, and only a signature ever comes back out.
+
+This is a deliberate choice over the other option the issue named — several persistent handles, one per identity, keyed by some name→handle mapping. A real TPM has very few persistent-object slots (often single digits), a scarce resource shared with anything else the host provisions into the TPM; consuming one per broker consumer does not scale to "one identity per consumer or tier" the way an unbounded number of files does. The blob-per-identity model also needs no handle-allocation bookkeeping — the identity name _is_ the filename, exactly like Secure Enclave — and "forgetting" an identity is deleting its file, no `EvictControl` required.
+
+A named identity's `PublicKeyDER` and `Sign` error — they never create a key — when no blob file exists yet: enrolment stays a deliberate, separate act, exactly like the Secure Enclave and PIV backends. (The default identity keeps its original, different behaviour: `Sign`/`PublicKeyDER` on it create the key at the fixed handle if it is not already there, unchanged from before named identities existed.)
 
 ## YubiKey / PIV (cross-platform)
 

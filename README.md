@@ -22,7 +22,7 @@ signet is a single self-contained Go binary that implements this pattern across 
 - **TPM 2.0**: auto-detected on Linux and Windows with a reachable TPM device
 - **YubiKey / PIV token**: cross-platform fallback, or explicit with `--backend piv`
 
-The backends are compiled in and selected at runtime; switching hardware is a one-flag change, not a migration. The private key never leaves the hardware. The only thing on disk is a short-lived bearer cache and, on macOS, the Enclave's own opaque key blob (useless if copied off the machine).
+The backends are compiled in and selected at runtime; switching hardware is a one-flag change, not a migration. The private key never leaves the hardware. The only thing on disk is a short-lived bearer cache and, for a named `--identity`, an opaque key blob (Secure Enclave, or TPM) useless if copied off the machine.
 
 signet acts as a standard credential helper, the same shape as `git credential`, `docker-credential-*`, and AWS `credential_process`. A consumer shells out for a fresh `Authorization` header on demand; signet produces it and exits. For workloads that cannot reach the hardware at all (a container with no path to the YubiKey), the `agent` subcommand runs one daemon that owns the token and signs for socket clients on request — the `ssh-agent` pattern — while every other subcommand stays single-shot.
 
