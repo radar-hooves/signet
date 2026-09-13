@@ -60,7 +60,7 @@ func (e *BrokerError) Error() string {
 // hand-maintained copies would drift the same way, hence one shared line.
 func attestRejectedHint() string {
 	return "local, not an outage: this key is not enrolled for the identity in use — " +
-		"--identity selects the secure-enclave key, --slot the PIV slot; unset uses the default"
+		"--identity selects the secure-enclave or tpm key, --slot the PIV slot; unset uses the default"
 }
 
 // canonicalMessage constructs the UTF-8 message the broker's canonical form
