@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [2026.9.2] - 2026-09-13
+
 ### Added
 
 - The TPM backend now holds more than one identity per machine, closing the gap that had the fleet's first TPM-rooted host (mimir) take a YubiKey instead ([#12](https://github.com/radar-hooves/signet/issues/12)). `--identity` now behaves identically across the Secure Enclave and TPM backends: an omitted value or an explicit `consumer` keeps the TPM's original behaviour unchanged (a key at the fixed persistent handle `0x81010001`, nothing on disk), so an already-enrolled host is not broken by upgrading. Any other name gets its own key, born under a deterministic ECC storage primary (`tpm2.ECCSRKTemplate`, reproduced bit-for-bit on the same TPM every time so it is never itself persisted) and wrapped by `TPM2_Create` into an opaque blob at `~/.signet/tpm-<identity>.key` — the same on-disk file model Secure Enclave already uses, chosen over spending one of a real TPM's scarce persistent-object slots per identity. `signet agent --bind <socket>=<key>` now routes `<key>` as a PIV slot under `--backend piv` or a named identity under `--backend tpm`/`secure-enclave`, so one TPM host can serve one socket per broker consumer, each bound to its own identity, exactly as the fleet's `signet-agent` NixOS module already binds one socket per consumer on a YubiKey. Proven end to end against the go-tpm software simulator: two named identities enrol to distinct keys, each signs, and each signature verifies only against its own public key.
