@@ -16,25 +16,36 @@ import (
 	"github.com/radar-hooves/signet/internal/signer"
 )
 
-// parseBind splits a "<socket>=<slot>" binding. The separator is the last '='
-// so socket paths are unconstrained (slot names never contain '=').
-func parseBind(s string) (socket, slot string, err error) {
+// parseBind splits a "<socket>=<key>" binding. The separator is the last '='
+// so socket paths are unconstrained (a PIV slot or TPM/Secure-Enclave
+// identity never contains '='). key means a PIV slot under --backend piv, or
+// an identity name under --backend tpm / secure-enclave — see Run.
+func parseBind(s string) (socket, key string, err error) {
 	i := strings.LastIndex(s, "=")
 	if i < 0 {
-		return "", "", fmt.Errorf("invalid --bind %q; want <socket>=<slot> (e.g. /run/signet/bd.sock=9c)", s)
+		return "", "", fmt.Errorf("invalid --bind %q; want <socket>=<slot-or-identity> (e.g. /run/signet/bd.sock=9c for piv, /run/signet/deploy.sock=deploy for tpm/secure-enclave)", s)
 	}
-	socket, slot = s[:i], s[i+1:]
-	if socket == "" || slot == "" {
-		return "", "", fmt.Errorf("invalid --bind %q; want <socket>=<slot> (e.g. /run/signet/bd.sock=9c)", s)
+	socket, key = s[:i], s[i+1:]
+	if socket == "" || key == "" {
+		return "", "", fmt.Errorf("invalid --bind %q; want <socket>=<slot-or-identity> (e.g. /run/signet/bd.sock=9c for piv, /run/signet/deploy.sock=deploy for tpm/secure-enclave)", s)
 	}
-	return socket, slot, nil
+	return socket, key, nil
 }
 
-// Run starts the agent: one listener per "<socket>=<slot>" binding, all
+// Run starts the agent: one listener per "<socket>=<key>" binding, all
 // sharing a single hardware mutex, until a termination signal arrives.
+//
+// Each binding's key is passed to signer.New as BOTH slot and identity: every
+// backend reads only the one of those two params it understands (piv reads
+// slot, tpm and secure-enclave read identity) and ignores the other, so the
+// binding's meaning follows backend without any switch here. A key that is
+// the wrong shape for the chosen backend is refused loudly by that backend's
+// own constructor — an unrecognised PIV slot today, or (on tpm/secure-enclave)
+// signing against a never-enrolled identity at first use — never silently
+// reinterpreted or collapsed onto another binding's key.
 func Run(backend string, binds []string) error {
 	if len(binds) == 0 {
-		return fmt.Errorf("signet agent: at least one --bind <socket>=<slot> is required")
+		return fmt.Errorf("signet agent: at least one --bind <socket>=<slot-or-identity> is required")
 	}
 
 	var hw sync.Mutex // serialises every hardware access (the token is single-access)
@@ -53,12 +64,12 @@ func Run(backend string, binds []string) error {
 	}
 
 	for _, raw := range binds {
-		socket, slot, err := parseBind(raw)
+		socket, key, err := parseBind(raw)
 		if err != nil {
 			cleanup()
 			return err
 		}
-		s, err := signer.New(backend, slot, "")
+		s, err := signer.New(backend, key, key)
 		if err != nil {
 			cleanup()
 			return fmt.Errorf("bind %s: %w", socket, err)
@@ -75,7 +86,7 @@ func Run(backend string, binds []string) error {
 			defer wg.Done()
 			serve(ln, s, &hw)
 		}(ln, s)
-		fmt.Fprintf(os.Stderr, "signet agent: serving %s (backend %s, slot %s)\n", socket, backend, slot)
+		fmt.Fprintf(os.Stderr, "signet agent: serving %s (backend %s, key %s)\n", socket, backend, key)
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -112,7 +123,7 @@ func listenUnix(socket string) (net.Listener, error) {
 }
 
 // serve accepts connections on ln and handles each with s, which is pinned to
-// this listener's slot. Returns when ln is closed (shutdown).
+// this listener's key (slot or identity). Returns when ln is closed (shutdown).
 func serve(ln net.Listener, s signer.Signer, hw *sync.Mutex) {
 	for {
 		conn, err := ln.Accept()
@@ -124,7 +135,7 @@ func serve(ln net.Listener, s signer.Signer, hw *sync.Mutex) {
 }
 
 // handleConn reads one request, performs the bound op under the hardware
-// mutex, and writes one response. The slot is the listener's, never the client's.
+// mutex, and writes one response. The key is the listener's, never the client's.
 func handleConn(conn net.Conn, s signer.Signer, hw *sync.Mutex) {
 	defer conn.Close()
 	_ = conn.SetDeadline(timeNow().Add(connTimeout))

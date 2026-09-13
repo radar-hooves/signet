@@ -9,13 +9,15 @@
 //
 // Two halves live here:
 //
-//   - the serve side (server.go, `signet agent --bind <socket>=<slot> ...`): one
-//     daemon owns the single-access YubiKey and serves a Unix socket per binding.
-//     Each socket is pinned to ONE slot at listen time; the slot is never taken
-//     from a request, so a client on a socket can only ever sign with that
-//     socket's key — it cannot impersonate another identity. All hardware access
-//     is serialised through one mutex because the token is single-access. The
-//     agent exposes exactly two ops, pubkey and sign; it never generates or
+//   - the serve side (server.go, `signet agent --bind <socket>=<slot-or-identity>
+//     ...`): one daemon owns the hardware and serves a Unix socket per binding.
+//     Each socket is pinned to ONE key at listen time — a PIV slot under
+//     --backend piv, a named identity under --backend tpm or secure-enclave —
+//     and that key is never taken from a request, so a client on a socket can
+//     only ever sign with that socket's key; it cannot impersonate another
+//     identity. All hardware access is serialised through one mutex (needed for
+//     a single-access token like a YubiKey; harmless overhead for TPM/Enclave).
+//     The agent exposes exactly two ops, pubkey and sign; it never generates or
 //     overwrites a key (enrolment stays a deliberate host operation).
 //
 //   - the client side (client.go, selected by `--agent <socket>` on sign / enrol
@@ -24,10 +26,11 @@
 //     resolve-by-public-key, the broker neither knows nor cares that the
 //     signature came via the agent.
 //
-// Security model: the private key never leaves the YubiKey and the device never
-// leaves the agent. A compromised client can ask for a signature over a nonce, but
-// the broker's challenge nonces are single-use (replay-dead) and the slot binding
-// stops it attesting as anything but itself; it cannot extract a key.
+// Security model: the private key never leaves the hardware and the hardware
+// never leaves the agent. A compromised client can ask for a signature over a
+// nonce, but the broker's challenge nonces are single-use (replay-dead) and the
+// socket's fixed key binding stops it attesting as anything but itself; it
+// cannot extract a key.
 package agent
 
 import "time"

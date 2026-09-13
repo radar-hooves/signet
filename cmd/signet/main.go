@@ -29,7 +29,7 @@
 //	signet headers [flags] --broker <url> --credential <name> [--header <name>] [--format bearer|raw] [--bare]
 //	signet vend-to-file [flags] --broker <url> [--field <name>] [--mode <octal>] [--print-shape] <name> <dest>
 //	signet exec    [flags] --broker <url> --credential <name> --env-var <NAME> [--field <name>] -- <command> [args...]
-//	signet agent   --bind <socket>=<slot> [--bind ...] [--backend piv]
+//	signet agent   --bind <socket>=<slot-or-identity> [--bind ...] [--backend piv|tpm]
 //	signet version
 //	signet doctor  [flags]
 //
@@ -37,15 +37,18 @@
 //
 //	--backend   secure-enclave | tpm | piv   (default: auto-detect for the platform)
 //	--slot      9a | 9c | 9d | 9e | 82..95   (piv backend only; default: 9c)
-//	--identity  <name>                       (secure-enclave backend only; default: consumer)
+//	--identity  <name>                       (secure-enclave and tpm backends; default: consumer)
 //	--agent     <socket>                     (sign via a signet agent socket, not local hardware)
 //	--user-presence                          (enrol only; require Touch ID per signature)
 //
-// --identity names the local Secure-Enclave key blob, the way an SSH key
-// filename picks one key of several, so one Mac can hold more than one identity.
-// It is local-only and never sent to the broker, which resolves the identity
-// from the presented public key (resolve-by-key). It is ignored by the PIV
-// and TPM backends, where the slot / persistent handle selects the key.
+// --identity names the local key, the way an SSH key filename picks one key of
+// several, so one machine can hold more than one identity: Secure Enclave
+// (se-<identity>.key) and TPM (tpm-<identity>.key, except the default identity
+// "consumer", which stays at the TPM's original fixed persistent handle for
+// backward compatibility) both key their on-disk state by it. It is local-only
+// and never sent to the broker, which resolves the identity from the presented
+// public key (resolve-by-key). It is ignored by the PIV backend, where the
+// slot selects the key.
 package main
 
 import (
@@ -275,7 +278,7 @@ func parseArgs(fs *flag.FlagSet, args []string) (help bool, err error) {
 func signerFlags(fs *flag.FlagSet) (backend, slot, identity, agentSock *string) {
 	backend = fs.String("backend", "", "hardware backend: secure-enclave | tpm | piv (default: auto-detect)")
 	slot = fs.String("slot", "", "PIV slot: 9a | 9c | 9d | 9e | 82..95 (piv backend only; default: 9c)")
-	identity = fs.String("identity", "", "Secure-Enclave key name (secure-enclave backend only; default: consumer)")
+	identity = fs.String("identity", "", "key name (secure-enclave and tpm backends; default: consumer)")
 	agentSock = fs.String("agent", "", "path to a signet agent socket; sign/get the public key via the agent instead of local hardware")
 	return
 }
@@ -376,8 +379,8 @@ func run(args []string) error {
 	case "agent":
 		fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 		var binds bindList
-		fs.Var(&binds, "bind", "socket=slot binding, repeatable (e.g. /run/signet/bd.sock=9c)")
-		backend := fs.String("backend", "piv", "hardware backend the agent owns (piv has selectable slots)")
+		fs.Var(&binds, "bind", "socket=slot-or-identity binding, repeatable (e.g. /run/signet/bd.sock=9c for piv, /run/signet/deploy.sock=deploy for tpm/secure-enclave)")
+		backend := fs.String("backend", "piv", "hardware backend the agent owns: piv (selectable slots), tpm or secure-enclave (selectable identities)")
 		help, err := parseArgs(fs, args[1:])
 		if help {
 			return nil
@@ -518,7 +521,9 @@ Subcommands:
 Flags (enrol, sign, auth, verify, headers, vend-to-file, exec, doctor):
   --backend    secure-enclave | tpm | piv   (default: auto-detect)
   --slot       9a | 9c | 9d | 9e | 82..95   (piv only; 82..95 are hex retired slots; default: 9c)
-  --identity   <name>                       (secure-enclave only; default: consumer)
+  --identity   <name>                       (secure-enclave, tpm; default: consumer — tpm's default
+                                              identity keeps the original fixed persistent handle;
+                                              any other name gets its own key)
   --agent      <socket>                     (sign via a signet agent socket, not local hardware)
   --user-presence                           (enrol only; require Touch ID per signature; secure-enclave only)
 
@@ -555,10 +560,15 @@ Vend-to-file exit codes:
 
 ` + execHelpBody() + `
 Agent (serve mode):
-  signet agent --bind <socket>=<slot> [--bind ...] [--backend piv]
-    One daemon owns the token and serves a Unix socket per binding. Each socket
-    is pinned to one slot; clients on it can only sign with that slot's key. The
-    agent serves pubkey and sign only — it never generates a key.
+  signet agent --bind <socket>=<slot-or-identity> [--bind ...] [--backend piv|tpm|secure-enclave]
+    One daemon owns the hardware and serves a Unix socket per binding. The
+    binding's right-hand side means a PIV slot under --backend piv (e.g. 9c),
+    or a named identity under --backend tpm or secure-enclave (e.g. deploy,
+    already enrolled with 'signet enrol --backend tpm --identity deploy'). Each
+    socket is pinned to one key; clients on it can only sign with that key —
+    never another binding's. The agent serves pubkey and sign only — it never
+    generates a key, so signing against a never-enrolled identity is refused,
+    loudly, rather than silently creating one.
 
 `
 }
