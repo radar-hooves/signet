@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- The broker-rejected-attestation hint (`verify`, `headers`, `vend-to-file`, `exec`) no longer names "this key is not enrolled" as the cause of a 401 with confidence it does not have. Portcullis caps pending challenges at ten per key and mints a throwaway challenge past the cap so the token leg answers the SAME body (`{"error":"unauthenticated","detail":"attestation failed"}`) whether the key genuinely is not enrolled or the cap was hit — deliberate, to preserve the no-enumeration-oracle property, but it makes the two causes indistinguishable from the response alone today. Measured 2026-09-14 on atlas: one `nixos-rebuild switch` started 17 concurrent `signet vend-to-file` processes against one key, the cap refused the other seven, every key was enrolled, and a one-second wait would have cleared it — but the hint sent the reader hunting an enrolment problem that did not exist. The hint now quotes the broker's own `error`/`detail` fields and names both live causes ("not enrolled for this identity, or too many challenges pending for this key: retry in a moment") instead of picking one. `docs/usage.md`'s exit-3 row is reworded to match. No retry is added: `radar-hooves/portcullis` does not yet answer a cap hit with a response signet can branch on (a typed 429 carrying `code`/`retry_after` was proposed but had not landed on `main` as of this fix) — once it does, `verify`/`headers`/`vend-to-file`/`exec` can retry once and narrow the hint back to whichever cause the broker actually named.
+
 ## [2026.9.2] - 2026-09-13
 
 ### Added

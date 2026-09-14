@@ -94,7 +94,7 @@ func VendToFile(s signer.Signer, brokerURL, credName, dest, field string, mode o
 		var be *BrokerError
 		if errors.As(attestErr, &be) {
 			fmt.Fprintf(os.Stderr, "signet vend-to-file: broker rejected attestation: %v\n", attestErr)
-			fmt.Fprintf(os.Stderr, "signet vend-to-file: %s\n", attestRejectedHint())
+			fmt.Fprintf(os.Stderr, "signet vend-to-file: %s\n", attestRejectedHint(be))
 			return ExitVendToFileAttestRejected, nil
 		}
 		fmt.Fprintf(os.Stderr, "signet vend-to-file: unexpected error: %v\n", attestErr)

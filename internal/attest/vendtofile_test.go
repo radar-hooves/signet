@@ -410,10 +410,10 @@ func TestVendToFile_KeyMissing(t *testing.T) {
 }
 
 // TestVendToFile_AttestRejected verifies exit code 3 when the broker returns
-// 401 on the attestation challenge, and that the guidance line steers the
-// reader local — the shared attestRejectedHint wording (the estate finding:
-// a bare "broker 401" reads like a broker fault and sends the reader off
-// diagnosing the wrong system).
+// 401 on the attestation challenge, and that the shared attestRejectedHint
+// wording quotes the broker's own detail and names both live causes (not
+// enrolled, or the per-key pending-challenge cap) rather than asserting the
+// wrong one with confidence.
 func TestVendToFile_AttestRejected(t *testing.T) {
 	setTempHome(t)
 	srv := rejectingBroker(t, http.StatusUnauthorized)
@@ -432,8 +432,11 @@ func TestVendToFile_AttestRejected(t *testing.T) {
 	if code != ExitVendToFileAttestRejected {
 		t.Errorf("exit code = %d, want %d (ExitVendToFileAttestRejected)", code, ExitVendToFileAttestRejected)
 	}
-	if !strings.Contains(stderr, "local, not an outage") {
-		t.Errorf("stderr = %q, want the local-not-an-outage guidance after a broker-rejected attestation", stderr)
+	if !strings.Contains(stderr, "not enrolled for this identity, or too many challenges pending for this key") {
+		t.Errorf("stderr = %q, want the two-cause guidance after a broker-rejected attestation", stderr)
+	}
+	if !strings.Contains(stderr, "unauthenticated: attestation failed") {
+		t.Errorf("stderr = %q, want the broker's own quoted detail", stderr)
 	}
 	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
 		t.Errorf("dest must not be created on failure; stat error = %v", statErr)

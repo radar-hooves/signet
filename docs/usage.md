@@ -119,14 +119,14 @@ signet verify --broker <url> [--credential <name>] [--backend <backend>] [--iden
 
 `verify` prints a short diagnostic table to stdout and exits with a typed exit code:
 
-| Code | Meaning                                                                                                                                               |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | Success: attestation accepted; credential resolvable (if `--credential` given).                                                                       |
-| `1`  | Unexpected transport or argument error.                                                                                                               |
-| `2`  | Key missing: no key enrolled for this identity and backend.                                                                                           |
-| `3`  | Attestation rejected: the broker answered and refused this key (4xx) — a local enrolment problem (wrong or unenrolled identity), not a broker outage. |
-| `4`  | Credential out of scope: the identity is attested but the credential is not in its vend scope (403).                                                  |
-| `5`  | Credential not found: the credential name is absent from the broker's catalogue (404).                                                                |
+| Code | Meaning |
+| --- | --- |
+| `0` | Success: attestation accepted; credential resolvable (if `--credential` given). |
+| `1` | Unexpected transport or argument error. |
+| `2` | Key missing: no key enrolled for this identity and backend. |
+| `3` | Attestation rejected: the broker answered and refused this key (4xx) — not enrolled for this identity, or too many challenges pending for this key: retry in a moment (today's broker body cannot distinguish the two). |
+| `4` | Credential out of scope: the identity is attested but the credential is not in its vend scope (403). |
+| `5` | Credential not found: the credential name is absent from the broker's catalogue (404). |
 
 Example output (successful attestation, credential probed):
 

@@ -74,12 +74,19 @@ func verifyBrokerWithCred(t *testing.T, credStatus int) *httptest.Server {
 }
 
 // rejectingBroker builds a fake broker that returns challengeStatus on
-// /v1/attest/challenge, simulating a broker rejection of the attestation.
+// /v1/attest/challenge, simulating a broker rejection of the attestation. The
+// body matches the real broker's shape for an unauthenticated 401
+// (portcullis: {"error":"unauthenticated","detail":"attestation failed"}) —
+// the SAME body whether the presented key genuinely is not enrolled or the
+// broker's per-key pending-challenge cap was hit, so a test against this body
+// cannot distinguish the two causes either, matching production.
 func rejectingBroker(t *testing.T, challengeStatus int) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/attest/challenge", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(challengeStatus)
+		w.Write([]byte(`{"error":"unauthenticated","detail":"attestation failed"}`)) //nolint:errcheck
 	})
 	return httptest.NewServer(mux)
 }
@@ -121,9 +128,13 @@ func TestVerify_KeyMissing(t *testing.T) {
 
 // TestVerify_AttestRejected verifies exit code 3 when the broker returns 401
 // on the attestation challenge (resolves to a broker-rejection, not transport),
-// and that the guidance line steers the reader local: a raw "broker 401" reads
-// like a broker fault and sends the reader off diagnosing the wrong system
-// (the estate finding behind this wording).
+// that the guidance line steers the reader local rather than reading like a
+// broker fault, and that it quotes the broker's own detail and names both
+// live causes (not enrolled, or the per-key pending-challenge cap) instead of
+// asserting the wrong one with confidence — radar-hooves/master-project,
+// dispatched 2026-09-14 while restoring atlas's household vault: the broker's
+// cap refused 7 of 17 concurrent `signet vend-to-file` attestations with the
+// same 401 body a genuinely unenrolled key gets, and every key was enrolled.
 func TestVerify_AttestRejected(t *testing.T) {
 	setTempHome(t)
 	srv := rejectingBroker(t, http.StatusUnauthorized)
@@ -141,8 +152,11 @@ func TestVerify_AttestRejected(t *testing.T) {
 	if code != ExitVerifyAttestRejected {
 		t.Errorf("exit code = %d, want %d (ExitVerifyAttestRejected)", code, ExitVerifyAttestRejected)
 	}
-	if !strings.Contains(out, "local, not an outage") {
-		t.Errorf("stdout = %q, want the local-not-an-outage guidance after a broker-rejected attestation", out)
+	if !strings.Contains(out, "not enrolled for this identity, or too many challenges pending for this key") {
+		t.Errorf("stdout = %q, want the two-cause guidance after a broker-rejected attestation", out)
+	}
+	if !strings.Contains(out, "unauthenticated: attestation failed") {
+		t.Errorf("stdout = %q, want the broker's own quoted detail", out)
 	}
 }
 

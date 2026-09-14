@@ -52,15 +52,31 @@ func (e *BrokerError) Error() string {
 // (verify, headers, vend-to-file, exec) prints after a broker-rejected
 // attestation. A 4xx there means the broker ANSWERED — the refusal is local
 // — but the raw error ("broker 401: ...") reads exactly like a broker fault,
-// and the reader gets sent off diagnosing the wrong system: the usual cause
-// is the default identity's key simply not being enrolled with this broker.
-// verify alone carried this wording until 2026-09-02 while headers,
-// vend-to-file and exec — the paths a real consumer actually takes, headers
-// above all, as every headersHelper runs it — printed the bare 401; four
-// hand-maintained copies would drift the same way, hence one shared line.
-func attestRejectedHint() string {
-	return "local, not an outage: this key is not enrolled for the identity in use — " +
-		"--identity selects the secure-enclave or tpm key, --slot the PIV slot; unset uses the default"
+// and the reader gets sent off diagnosing the wrong system.
+//
+// It used to name one cause with confidence ("this key is not enrolled").
+// That is wrong whenever the broker's cap on pending challenges per key is
+// what actually answered: portcullis mints a throwaway challenge once a key
+// has too many pending, so the token leg 401s with the SAME body
+// ({"error":"unauthenticated","detail":"attestation failed"}) as a genuinely
+// unenrolled key — deliberately, to preserve the no-enumeration-oracle
+// property, so today the two causes are not distinguishable from the
+// response alone. Measured 2026-09-14 on atlas: one `nixos-rebuild switch`
+// started 17 concurrent `signet vend-to-file` processes against one key, the
+// broker's cap of ten pending challenges refused the other seven, every key
+// WAS enrolled, and a one-second wait would have cleared it — but the old
+// wording sent the reader hunting an enrolment problem that did not exist.
+// So the hint quotes the broker's own words and names both live causes
+// rather than picking one; narrow it back to a single cause only once the
+// broker answers a cap hit with a response this can branch on (tracked as a
+// signet follow-up, not yet shipped).
+func attestRejectedHint(be *BrokerError) string {
+	return fmt.Sprintf(
+		"broker refused this attestation (%s) — not enrolled for this identity, "+
+			"or too many challenges pending for this key: retry in a moment. "+
+			"--identity selects the secure-enclave or tpm key, --slot the PIV slot; unset uses the default",
+		vendBrokerDetail([]byte(be.Body)),
+	)
 }
 
 // canonicalMessage constructs the UTF-8 message the broker's canonical form

@@ -165,7 +165,7 @@ func Exec(s signer.Signer, brokerURL, credName, envVar, field string, argv []str
 		var be *BrokerError
 		if errors.As(attestErr, &be) {
 			fmt.Fprintf(os.Stderr, "signet exec: broker rejected attestation: %v\n", attestErr)
-			fmt.Fprintf(os.Stderr, "signet exec: %s\n", attestRejectedHint())
+			fmt.Fprintf(os.Stderr, "signet exec: %s\n", attestRejectedHint(be))
 			return ExitExecAttestRejected, nil
 		}
 		fmt.Fprintf(os.Stderr, "signet exec: unexpected error: %v\n", attestErr)

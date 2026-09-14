@@ -88,7 +88,7 @@ func Verify(s signer.Signer, brokerURL, credName string) (exitCode int, err erro
 			// Wording is deliberate: a 4xx means the broker ANSWERED, so this
 			// line must not read as a broker fault (attestRejectedHint).
 			fmt.Printf("  attest           FAIL           broker answered and refused this key: %v\n", attestErr)
-			fmt.Printf("                                  %s\n", attestRejectedHint())
+			fmt.Printf("                                  %s\n", attestRejectedHint(be))
 			return ExitVerifyAttestRejected, nil
 		}
 		// Transport or unexpected error: propagate so the caller sees exit 1.

@@ -120,7 +120,7 @@ func Headers(s signer.Signer, brokerURL, credName, headerName, format string, ba
 		var be *BrokerError
 		if errors.As(attestErr, &be) {
 			fmt.Fprintf(os.Stderr, "signet headers: broker rejected attestation: %v\n", attestErr)
-			fmt.Fprintf(os.Stderr, "signet headers: %s\n", attestRejectedHint())
+			fmt.Fprintf(os.Stderr, "signet headers: %s\n", attestRejectedHint(be))
 			return ExitHeadersAttestRejected, nil
 		}
 		fmt.Fprintf(os.Stderr, "signet headers: unexpected error: %v\n", attestErr)

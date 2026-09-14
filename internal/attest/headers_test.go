@@ -575,11 +575,13 @@ func TestHeaders_KeyMissing(t *testing.T) {
 }
 
 // TestHeaders_AttestRejected verifies exit code 3 when the broker returns 401
-// on the attestation challenge (resolves to a broker-rejection, not transport),
-// and that the guidance line steers the reader local: headers is the path every
-// headersHelper consumer runs, and a bare "broker 401" here sent readers off
-// diagnosing the broker when the usual cause is the default identity's key not
-// being enrolled (the estate finding; verify had the wording, headers did not).
+// on the attestation challenge (resolves to a broker-rejection, not transport):
+// headers is the path every headersHelper consumer runs, and the guidance line
+// must quote the broker's own detail and name both live causes (not enrolled,
+// or the per-key pending-challenge cap) rather than asserting the wrong one
+// with confidence — see attestRejectedHint's doc comment for the estate
+// finding this fixes (17 concurrent vend-to-file attestations, cap-refused,
+// every key enrolled).
 func TestHeaders_AttestRejected(t *testing.T) {
 	setTempHome(t)
 	srv := rejectingBroker(t, http.StatusUnauthorized)
@@ -597,8 +599,11 @@ func TestHeaders_AttestRejected(t *testing.T) {
 	if code != ExitHeadersAttestRejected {
 		t.Errorf("exit code = %d, want %d (ExitHeadersAttestRejected)", code, ExitHeadersAttestRejected)
 	}
-	if !strings.Contains(stderr, "local, not an outage") {
-		t.Errorf("stderr = %q, want the local-not-an-outage guidance after a broker-rejected attestation", stderr)
+	if !strings.Contains(stderr, "not enrolled for this identity, or too many challenges pending for this key") {
+		t.Errorf("stderr = %q, want the two-cause guidance after a broker-rejected attestation", stderr)
+	}
+	if !strings.Contains(stderr, "unauthenticated: attestation failed") {
+		t.Errorf("stderr = %q, want the broker's own quoted detail", stderr)
 	}
 }
 
