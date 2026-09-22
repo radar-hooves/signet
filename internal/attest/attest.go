@@ -15,7 +15,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/radar-hooves/signet/internal/signer"
 )
@@ -86,40 +89,109 @@ func canonicalMessage(challengeID, nonce string) string {
 	return challengeID + "." + nonce
 }
 
+// Retry tuning for the broker's two advisory 429s on the attest legs
+// (portcullis errors.py: `challenge_cap` from POST /v1/attest/token when a
+// proven per-key challenge-cap hit clears on its own; `rate_limited` from the
+// app-wide limiter ahead of any route). Both say "wait and retry"; `auth_locked`
+// (429, a tripped auth-failure lock) and every 401 say "this will not clear by
+// waiting" and are never retried here — same rule bearer.go's vendCredential
+// already applies to the vend door's 429.
+const (
+	maxAttestAttempts   = 3                // one send plus up to two retries
+	defaultRetryAfter   = 2 * time.Second  // portcullis's own advisory default (CHALLENGE_CAP_RETRY_AFTER_SECONDS)
+	maxSingleRetryAfter = 10 * time.Second // cap on any one wait, however large the header claims
+	maxTotalRetryWait   = 20 * time.Second // ceiling on waits summed across one call's retries
+)
+
+// sleepFunc is time.Sleep, indirected so tests can run the retry loop without
+// actually waiting.
+var sleepFunc = time.Sleep
+
+// retryableBrokerCode reports whether a 429's error code clears on its own.
+func retryableBrokerCode(code string) bool {
+	return code == "challenge_cap" || code == "rate_limited"
+}
+
+// retryAfterWait parses a Retry-After header (seconds, the only form portcullis
+// sends) into a wait duration, falling back to defaultRetryAfter when the
+// header is absent or unparseable, and clamping to maxSingleRetryAfter.
+func retryAfterWait(header string) time.Duration {
+	if header == "" {
+		return defaultRetryAfter
+	}
+	secs, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || secs < 0 {
+		return defaultRetryAfter
+	}
+	wait := time.Duration(secs) * time.Second
+	if wait > maxSingleRetryAfter {
+		return maxSingleRetryAfter
+	}
+	return wait
+}
+
 // brokerPost sends a POST request with a JSON body to endpoint and decodes the
 // JSON response into result. If bearerKey is non-empty, it is sent as an
 // Authorization: Bearer header. A non-2xx response returns a *BrokerError.
+//
+// A 429 coded `challenge_cap` or `rate_limited` is retried in place, waiting
+// the broker's advertised Retry-After (or defaultRetryAfter absent one),
+// bounded by maxAttestAttempts and maxTotalRetryWait; any other status, or a
+// 429 with any other code (notably `auth_locked`, and every 401), returns
+// immediately exactly as before.
 func brokerPost(endpoint string, body any, bearerKey string, result any) error {
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(encoded))
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if bearerKey != "" {
-		req.Header.Set("Authorization", "Bearer "+bearerKey)
-	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("network error: %w", err)
-	}
-	defer resp.Body.Close()
+	var totalWait time.Duration
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(encoded))
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if bearerKey != "" {
+			req.Header.Set("Authorization", "Bearer "+bearerKey)
+		}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("network error: %w", err)
+		}
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("read response: %w", readErr)
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			be := &BrokerError{Status: resp.StatusCode, Body: strings.TrimSpace(string(respBody))}
+			if resp.StatusCode != http.StatusTooManyRequests || attempt >= maxAttestAttempts {
+				return be
+			}
+			var f brokerErrorFields
+			_ = json.Unmarshal(respBody, &f)
+			if !retryableBrokerCode(f.Error) {
+				return be
+			}
+			wait := retryAfterWait(resp.Header.Get("Retry-After"))
+			if totalWait+wait > maxTotalRetryWait {
+				return be
+			}
+			totalWait += wait
+			fmt.Fprintf(os.Stderr, "signet: broker %s, retrying in %s (attempt %d/%d)\n",
+				vendBrokerDetail(respBody), wait, attempt, maxAttestAttempts-1)
+			sleepFunc(wait)
+			continue
+		}
+
+		if err := json.Unmarshal(respBody, result); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		return nil
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &BrokerError{Status: resp.StatusCode, Body: strings.TrimSpace(string(respBody))}
-	}
-	if err := json.Unmarshal(respBody, result); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	return nil
 }
 
 // attestFresh performs legs 1 and 2 of the attestation protocol:

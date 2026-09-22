@@ -4,6 +4,7 @@ package attest
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -459,6 +460,170 @@ func TestCanonicalMessage(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("canonicalMessage(%q, %q) = %q; want %q", tc.challengeID, tc.nonce, got, tc.want)
 		}
+	}
+}
+
+// stubSleep swaps sleepFunc for one that records requested durations instead
+// of waiting, restoring the original on test cleanup.
+func stubSleep(t *testing.T) *[]time.Duration {
+	t.Helper()
+	var waits []time.Duration
+	orig := sleepFunc
+	sleepFunc = func(d time.Duration) { waits = append(waits, d) }
+	t.Cleanup(func() { sleepFunc = orig })
+	return &waits
+}
+
+// write429 writes a 429 response coded err, with an optional Retry-After
+// header (omitted when retryAfter == "").
+func write429(w http.ResponseWriter, code, retryAfter string) {
+	if retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
+	w.WriteHeader(http.StatusTooManyRequests)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "detail": code + " detail"})
+}
+
+// TestBrokerPost_RetriesChallengeCapThenSucceeds verifies a 429 coded
+// challenge_cap is retried after the broker's advertised Retry-After and the
+// eventual success is returned to the caller.
+func TestBrokerPost_RetriesChallengeCapThenSucceeds(t *testing.T) {
+	waits := stubSleep(t)
+
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/attest/token", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 2 {
+			write429(w, "challenge_cap", "1")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tokenResult{Key: "k", KeyID: "id", Name: "n"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var tr tokenResult
+	if err := brokerPost(srv.URL+"/v1/attest/token", map[string]string{}, "", &tr); err != nil {
+		t.Fatalf("brokerPost: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls, got %d", calls)
+	}
+	if got := *waits; len(got) != 1 || got[0] != 1*time.Second {
+		t.Fatalf("expected one 1s wait, got %v", got)
+	}
+	if tr.Key != "k" {
+		t.Fatalf("unexpected token result: %+v", tr)
+	}
+}
+
+// TestBrokerPost_RetriesExhausted verifies a persistent retryable 429 (here
+// rate_limited) is retried up to maxAttestAttempts and then returned as the
+// broker's own error, never masked as success.
+func TestBrokerPost_RetriesExhausted(t *testing.T) {
+	stubSleep(t)
+
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/attest/challenge", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		write429(w, "rate_limited", "1")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var cr challengeResult
+	err := brokerPost(srv.URL+"/v1/attest/challenge", map[string]string{}, "", &cr)
+	if err == nil {
+		t.Fatal("expected error once retries are exhausted")
+	}
+	var be *BrokerError
+	if !errors.As(err, &be) || be.Status != http.StatusTooManyRequests {
+		t.Fatalf("expected *BrokerError 429, got %v", err)
+	}
+	if calls != maxAttestAttempts {
+		t.Fatalf("expected %d calls, got %d", maxAttestAttempts, calls)
+	}
+}
+
+// TestBrokerPost_AuthLockedNotRetried verifies the app-wide auth_locked 429 —
+// a tripped auth-failure lock, not a transient cap — fails on the first
+// response: waiting cannot fix a locked-out bearer.
+func TestBrokerPost_AuthLockedNotRetried(t *testing.T) {
+	stubSleep(t)
+
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/attest/challenge", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		write429(w, "auth_locked", "1")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var cr challengeResult
+	err := brokerPost(srv.URL+"/v1/attest/challenge", map[string]string{}, "", &cr)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly 1 call (no retry), got %d", calls)
+	}
+}
+
+// TestBrokerPost_401NotRetried verifies a plain 401 (unauthenticated) is never
+// retried — it is a permanent identity fault, not a transient one.
+func TestBrokerPost_401NotRetried(t *testing.T) {
+	stubSleep(t)
+
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/attest/token", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthenticated", "detail": "attestation failed"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var tr tokenResult
+	err := brokerPost(srv.URL+"/v1/attest/token", map[string]string{}, "", &tr)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly 1 call (no retry), got %d", calls)
+	}
+}
+
+// TestBrokerPost_RetryAfterAbsentUsesDefault verifies a retryable 429 with no
+// Retry-After header waits defaultRetryAfter rather than failing immediately
+// or waiting indefinitely.
+func TestBrokerPost_RetryAfterAbsentUsesDefault(t *testing.T) {
+	waits := stubSleep(t)
+
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/attest/token", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 2 {
+			write429(w, "challenge_cap", "")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tokenResult{Key: "k", KeyID: "id", Name: "n"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var tr tokenResult
+	if err := brokerPost(srv.URL+"/v1/attest/token", map[string]string{}, "", &tr); err != nil {
+		t.Fatalf("brokerPost: %v", err)
+	}
+	if got := *waits; len(got) != 1 || got[0] != defaultRetryAfter {
+		t.Fatalf("expected one wait of defaultRetryAfter, got %v", got)
 	}
 }
 
