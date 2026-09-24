@@ -1,6 +1,6 @@
 # Configuration
 
-signet is configured entirely through per-subcommand flags. There are no environment variables. For the hardware backends themselves see [backends.md](backends.md); for the commands see [usage.md](usage.md).
+signet is configured through per-subcommand flags, plus three environment variables (`SIGNET_BACKEND`, `SIGNET_SLOT`, `SIGNET_IDENTITY`) that set those flags' defaults. For the hardware backends themselves see [backends.md](backends.md); for the commands see [usage.md](usage.md).
 
 ## Flags (accepted on every subcommand)
 
@@ -9,18 +9,18 @@ signet is configured entirely through per-subcommand flags. There are no environ
 Selects the hardware backend.
 
 - **Values:** `secure-enclave` (aliases `enclave`, `se`), `tpm`, `piv`.
-- **Default:** omitted, which triggers auto-detection (see [Backend selection](#backend-selection)).
+- **Default:** `$SIGNET_BACKEND` if set, else auto-detection (see [Backend selection](#backend-selection)).
 - **Effect:** overrides auto-detection; an unrecognised value is an error rather than a silent fallback.
 
 Switching hardware is a one-flag change: `--backend secure-enclave`, `--backend tpm`, or `--backend piv` — not a reconfiguration or a migration.
 
 ### --slot
 
-Selects the PIV signing slot. Accepted values: `9a`, `9c`, `9d`, `9e`, or a retired key-management slot `82`–`95`. Defaults to `9c` (Digital Signature slot). Ignored on non-PIV backends. Each slot holds an independent keypair, so one YubiKey can root multiple distinct identities — one per slot, each with its own public key and its own broker enrolment.
+Selects the PIV signing slot. Accepted values: `9a`, `9c`, `9d`, `9e`, or a retired key-management slot `82`–`95`. Defaults to `$SIGNET_SLOT` if set, else `9c` (Digital Signature slot). Ignored on non-PIV backends. Each slot holds an independent keypair, so one YubiKey can root multiple distinct identities — one per slot, each with its own public key and its own broker enrolment.
 
 ### --identity
 
-Names which hardware keypair to sign as — the **local label of a keypair**, exactly like the filename you give an SSH key. Defaults to `consumer`.
+Names which hardware keypair to sign as — the **local label of a keypair**, exactly like the filename you give an SSH key. Defaults to `$SIGNET_IDENTITY` if set, else `consumer`.
 
 This is why the flag exists. A single machine can hold more than one consumer (say a sidecar service and a separate vend client), and each needs its own distinct keypair so the broker can tell them apart. Without a name there would be a single anonymous key slot per machine; with it you can have two consumers on one host, each with its own key and its own broker enrolment.
 
@@ -32,12 +32,23 @@ Honoured by the **Secure Enclave and TPM** backends. Secure Enclave names the on
 
 Secure-Enclave-only. Gates each subsequent signature behind Touch ID or the device passcode. Suits an interactive identity; on TPM and PIV this flag has no effect. Accepted only on `enrol`.
 
+## Environment variables
+
+`SIGNET_BACKEND`, `SIGNET_SLOT` and `SIGNET_IDENTITY` set `--backend`, `--slot` and `--identity`'s default on every subcommand that accepts them (`enrol`, `sign`, `auth`, `verify`, `headers`, `vend-to-file`, `exec`, `doctor`, and `agent`'s own `--backend`). Precedence, per flag, independently:
+
+1. The flag, if passed — always wins.
+2. The environment variable, if set to a non-empty value.
+3. The built-in default (auto-detect, `9c`, `consumer`).
+
+An unset, or explicitly-empty, environment variable changes nothing. This exists for a host that must name its backend/slot/identity once, in its own declared environment, rather than on every invocation — a stdio consumer whose launcher args are a literal array (not a shell command line) cannot splat a `--slot <n>` pair into an argument list shared by hosts that have no PIV slot to name, but it can carry a host-scoped environment block.
+
 ## Backend selection
 
 signet resolves the backend in this order:
 
 1. **`--backend` flag.** If passed, its value wins (`secure-enclave` / `enclave` / `se`, `tpm`, or `piv`). An unrecognised value is rejected.
-2. **Auto-detect** (when `--backend` is omitted):
+2. **`SIGNET_BACKEND`**, if set to a non-empty value.
+3. **Auto-detect** (when neither is set):
    - **macOS** uses the Secure Enclave.
    - **Linux and Windows** use the TPM if a TPM device is reachable, otherwise fall back to PIV.
    - **Anything else** uses PIV.

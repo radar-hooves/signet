@@ -151,15 +151,15 @@ signet speaks the `/v1/attest` HTTP contract and nothing more; it is not coupled
 
 ## Documentation
 
-| Guide                                                | What it covers                                                                                                                      |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| [Usage](docs/usage.md)                               | All ten subcommands (enrol, sign, auth, verify, headers, vend-to-file, exec, agent, doctor, version); wiring as a credential helper |
-| [Configuration](docs/configuration.md)               | Flags (--backend, --slot, --identity), backend selection, and on-disk paths                                                         |
-| [Hardware backends](docs/backends.md)                | The Secure Enclave, TPM, and PIV backends in depth                                                                                  |
-| [Building from source](docs/development/building.md) | The cgo build, the Swift shim, and the release toolchain                                                                            |
-| [Contributing](CONTRIBUTING.md)                      | Build prerequisites, per-platform constraints, test commands                                                                        |
-| [Security](SECURITY.md)                              | Reporting vulnerabilities and supported versions                                                                                    |
-| Brand assets                                         | [`docs/branding/`](docs/branding/)                                                                                                  |
+| Guide                                                | What it covers                                                                                                                                |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Usage](docs/usage.md)                               | All ten subcommands (enrol, sign, auth, verify, headers, vend-to-file, exec, agent, doctor, version); wiring as a credential helper           |
+| [Configuration](docs/configuration.md)               | Flags (--backend, --slot, --identity) and their SIGNET_BACKEND/SIGNET_SLOT/SIGNET_IDENTITY env defaults, backend selection, and on-disk paths |
+| [Hardware backends](docs/backends.md)                | The Secure Enclave, TPM, and PIV backends in depth                                                                                            |
+| [Building from source](docs/development/building.md) | The cgo build, the Swift shim, and the release toolchain                                                                                      |
+| [Contributing](CONTRIBUTING.md)                      | Build prerequisites, per-platform constraints, test commands                                                                                  |
+| [Security](SECURITY.md)                              | Reporting vulnerabilities and supported versions                                                                                              |
+| Brand assets                                         | [`docs/branding/`](docs/branding/)                                                                                                            |
 
 ## Contributing
 

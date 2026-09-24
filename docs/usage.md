@@ -87,7 +87,7 @@ A client reaches the agent with `--agent <socket>` on `sign`, `enrol`, or `auth`
 signet auth --agent /run/signet/myapp.sock https://broker.example.internal
 ```
 
-`--agent` swaps the local-hardware signer for one that forwards over the socket; nothing else changes, and the broker — which resolves identity by public key — neither knows nor cares that the signature came via the agent. A consuming application that wraps signet decides for itself how to configure the socket path it passes via `--agent`; signet has no environment variable of its own.
+`--agent` swaps the local-hardware signer for one that forwards over the socket; nothing else changes, and the broker — which resolves identity by public key — neither knows nor cares that the signature came via the agent. A consuming application that wraps signet decides for itself how to configure the socket path it passes via `--agent`; `--agent` has no environment-variable fallback of its own (`--backend`, `--slot` and `--identity` do — see [configuration.md](configuration.md#environment-variables)).
 
 ## Wiring signet as a credential helper
 

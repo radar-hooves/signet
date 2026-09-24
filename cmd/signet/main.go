@@ -35,11 +35,17 @@
 //
 // Flags (enrol, sign, auth, verify, headers, vend-to-file, exec, doctor):
 //
-//	--backend   secure-enclave | tpm | piv   (default: auto-detect for the platform)
-//	--slot      9a | 9c | 9d | 9e | 82..95   (piv backend only; default: 9c)
-//	--identity  <name>                       (secure-enclave and tpm backends; default: consumer)
+//	--backend   secure-enclave | tpm | piv   (default: $SIGNET_BACKEND, else auto-detect)
+//	--slot      9a | 9c | 9d | 9e | 82..95   (piv backend only; default: $SIGNET_SLOT, else 9c)
+//	--identity  <name>                       (secure-enclave and tpm backends; default: $SIGNET_IDENTITY, else consumer)
 //	--agent     <socket>                     (sign via a signet agent socket, not local hardware)
 //	--user-presence                          (enrol only; require Touch ID per signature)
+//
+// SIGNET_BACKEND, SIGNET_SLOT and SIGNET_IDENTITY set the flag's default when
+// the flag is absent; a passed flag always wins. This lets a host name its
+// backend/slot/identity once, in its own environment, for every invocation —
+// the shape a stdio consumer with a literal (non-shell) args array needs,
+// since it cannot splat a multi-token flag pair the way a shell string can.
 //
 // --identity names the local key, the way an SSH key filename picks one key of
 // several, so one machine can hold more than one identity: Secure Enclave
@@ -273,12 +279,35 @@ func parseArgs(fs *flag.FlagSet, args []string) (help bool, err error) {
 	return false, err
 }
 
+// envOr returns the named environment variable's value, or fallback if it is
+// unset or empty. An explicitly-exported empty value is treated the same as
+// unset, so a host's env block can be present-but-blank without it
+// overriding a flag's built-in default with an empty string.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 // signerFlags registers the backend/slot/identity/agent selection flags shared by
 // every signing subcommand on fs and returns pointers to their parsed values.
+//
+// --backend, --slot and --identity default to SIGNET_BACKEND, SIGNET_SLOT and
+// SIGNET_IDENTITY when the flag is not passed, so a host can name its backend,
+// slot and identity ONCE in its own environment (a fleet-declared Claude Code
+// `env` block, not a shell profile) and have every invocation honour it. This
+// exists because a Claude Code stdio MCP server's args are a literal array,
+// not a shell command line: it can substitute one whole token from one env
+// var (as the existing `--identity ${SIGNET_EXEC_IDENTITY:-github-mcp}`
+// entries do), but it cannot splat a host-only, PIV-only `--slot <n>` pair
+// into an array shared by every host, some of which have no PIV slot to name.
+// The flag always wins when passed, so this never silently overrides an
+// explicit per-invocation choice — only fills in one that was never made.
 func signerFlags(fs *flag.FlagSet) (backend, slot, identity, agentSock *string) {
-	backend = fs.String("backend", "", "hardware backend: secure-enclave | tpm | piv (default: auto-detect)")
-	slot = fs.String("slot", "", "PIV slot: 9a | 9c | 9d | 9e | 82..95 (piv backend only; default: 9c)")
-	identity = fs.String("identity", "", "key name (secure-enclave and tpm backends; default: consumer)")
+	backend = fs.String("backend", envOr("SIGNET_BACKEND", ""), "hardware backend: secure-enclave | tpm | piv (default: $SIGNET_BACKEND, else auto-detect)")
+	slot = fs.String("slot", envOr("SIGNET_SLOT", ""), "PIV slot: 9a | 9c | 9d | 9e | 82..95 (piv backend only; default: $SIGNET_SLOT, else 9c)")
+	identity = fs.String("identity", envOr("SIGNET_IDENTITY", ""), "key name (secure-enclave and tpm backends; default: $SIGNET_IDENTITY, else consumer)")
 	agentSock = fs.String("agent", "", "path to a signet agent socket; sign/get the public key via the agent instead of local hardware")
 	return
 }
@@ -380,7 +409,7 @@ func run(args []string) error {
 		fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 		var binds bindList
 		fs.Var(&binds, "bind", "socket=slot-or-identity binding, repeatable (e.g. /run/signet/bd.sock=9c for piv, /run/signet/deploy.sock=deploy for tpm/secure-enclave)")
-		backend := fs.String("backend", "piv", "hardware backend the agent owns: piv (selectable slots), tpm or secure-enclave (selectable identities)")
+		backend := fs.String("backend", envOr("SIGNET_BACKEND", "piv"), "hardware backend the agent owns: piv (selectable slots), tpm or secure-enclave (selectable identities) (default: $SIGNET_BACKEND, else piv)")
 		help, err := parseArgs(fs, args[1:])
 		if help {
 			return nil
@@ -519,13 +548,16 @@ Subcommands:
   doctor        Probe each backend and report availability (--backend probes one)
 
 Flags (enrol, sign, auth, verify, headers, vend-to-file, exec, doctor):
-  --backend    secure-enclave | tpm | piv   (default: auto-detect)
-  --slot       9a | 9c | 9d | 9e | 82..95   (piv only; 82..95 are hex retired slots; default: 9c)
-  --identity   <name>                       (secure-enclave, tpm; default: consumer — tpm's default
-                                              identity keeps the original fixed persistent handle;
+  --backend    secure-enclave | tpm | piv   (default: $SIGNET_BACKEND, else auto-detect)
+  --slot       9a | 9c | 9d | 9e | 82..95   (piv only; 82..95 are hex retired slots; default: $SIGNET_SLOT, else 9c)
+  --identity   <name>                       (secure-enclave, tpm; default: $SIGNET_IDENTITY, else consumer — tpm's
+                                              default identity keeps the original fixed persistent handle;
                                               any other name gets its own key)
   --agent      <socket>                     (sign via a signet agent socket, not local hardware)
   --user-presence                           (enrol only; require Touch ID per signature; secure-enclave only)
+
+SIGNET_BACKEND, SIGNET_SLOT and SIGNET_IDENTITY set the flag's default when the
+flag is absent; a passed flag always wins.
 
 Verify flags:
   --broker     <url>    broker URL (required)

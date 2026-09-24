@@ -35,6 +35,78 @@ func TestBindList(t *testing.T) {
 	}
 }
 
+// TestEnvOr pins envOr's precedence: a non-empty env var wins over the
+// fallback, an explicitly-empty one is treated as unset, and an unset one
+// changes nothing.
+func TestEnvOr(t *testing.T) {
+	const key = "SIGNET_TEST_ENVOR"
+
+	t.Setenv(key, "from-env")
+	if got := envOr(key, "fallback"); got != "from-env" {
+		t.Errorf("envOr with env set = %q, want %q", got, "from-env")
+	}
+
+	t.Setenv(key, "")
+	if got := envOr(key, "fallback"); got != "fallback" {
+		t.Errorf("envOr with env set empty = %q, want fallback %q", got, "fallback")
+	}
+
+	os.Unsetenv(key)
+	if got := envOr(key, "fallback"); got != "fallback" {
+		t.Errorf("envOr with env unset = %q, want fallback %q", got, "fallback")
+	}
+}
+
+// TestSignerFlagsEnvDefaults pins the three-way precedence signerFlags must
+// give --backend/--slot/--identity: an explicit flag always wins, a set
+// SIGNET_* env var is the default when the flag is absent, and an unset env
+// var falls through to the built-in default (auto-detect/empty) unchanged.
+// This is the fix for the fleet's stdio MCP entries (github, aws on atlas),
+// whose literal args array cannot splat a host-only --slot the way a shell
+// string can, so the host must be able to name it once in its environment.
+func TestSignerFlagsEnvDefaults(t *testing.T) {
+	parse := func(t *testing.T, args []string) (backend, slot, identity string) {
+		t.Helper()
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		b, s, i, _ := signerFlags(fs)
+		if err := fs.Parse(args); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		return *b, *s, *i
+	}
+
+	t.Run("env beats built-in default", func(t *testing.T) {
+		t.Setenv("SIGNET_BACKEND", "piv")
+		t.Setenv("SIGNET_SLOT", "93")
+		t.Setenv("SIGNET_IDENTITY", "github-mcp")
+		backend, slot, identity := parse(t, nil)
+		if backend != "piv" || slot != "93" || identity != "github-mcp" {
+			t.Errorf("backend=%q slot=%q identity=%q, want piv/93/github-mcp", backend, slot, identity)
+		}
+	})
+
+	t.Run("flag beats env", func(t *testing.T) {
+		t.Setenv("SIGNET_BACKEND", "piv")
+		t.Setenv("SIGNET_SLOT", "93")
+		t.Setenv("SIGNET_IDENTITY", "github-mcp")
+		backend, slot, identity := parse(t, []string{"--backend", "secure-enclave", "--slot", "9c", "--identity", "deploy"})
+		if backend != "secure-enclave" || slot != "9c" || identity != "deploy" {
+			t.Errorf("backend=%q slot=%q identity=%q, want secure-enclave/9c/deploy", backend, slot, identity)
+		}
+	})
+
+	t.Run("unset env changes nothing", func(t *testing.T) {
+		os.Unsetenv("SIGNET_BACKEND")
+		os.Unsetenv("SIGNET_SLOT")
+		os.Unsetenv("SIGNET_IDENTITY")
+		backend, slot, identity := parse(t, nil)
+		if backend != "" || slot != "" || identity != "" {
+			t.Errorf("backend=%q slot=%q identity=%q, want all empty (auto-detect / built-in defaults)", backend, slot, identity)
+		}
+	})
+}
+
 // TestRunHeadersFlagValidation pins the cmd-layer gate for `headers`: the
 // required/enum/non-empty checks must all fail fast (exit 1) before any
 // signer or network work happens.
