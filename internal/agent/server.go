@@ -122,21 +122,59 @@ func listenUnix(socket string) (net.Listener, error) {
 	return ln, nil
 }
 
+// pubkeyCache memoizes one binding's PublicKeyDER answer. The enrolled key for
+// a fixed slot/identity cannot change without an agent restart, so once
+// hardware has answered once there is no reason for a later request — however
+// many arrive at once — to reopen the card at all: a session start's fan-out
+// of MCP servers needs this same answer dozens of times a minute apart from
+// the one broker round trip that actually needs a fresh signature.
+//
+// A failed fetch is deliberately NOT cached: openFirstYubiKey already rides
+// out a transient PC/SC sharing violation internally before answering, and a
+// caller still seeing IsCardBusy after that must be free to retry against
+// real hardware again, not read the same failure back forever.
+type pubkeyCache struct {
+	mu     sync.Mutex
+	cached bool
+	der    string
+}
+
+// get returns the memoized public key, fetching it under hw at most once.
+// Concurrent misses serialise on c.mu rather than hw, so a cold start costs
+// exactly one hardware read however many clients ask at the same instant, and
+// a hit never contends with an in-flight sign at all.
+func (c *pubkeyCache) get(s signer.Signer, hw *sync.Mutex) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cached {
+		return c.der, nil
+	}
+	hw.Lock()
+	der, err := s.PublicKeyDER()
+	hw.Unlock()
+	if err != nil {
+		return "", err
+	}
+	c.der, c.cached = der, true
+	return c.der, nil
+}
+
 // serve accepts connections on ln and handles each with s, which is pinned to
 // this listener's key (slot or identity). Returns when ln is closed (shutdown).
 func serve(ln net.Listener, s signer.Signer, hw *sync.Mutex) {
+	cache := &pubkeyCache{}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return // listener closed on shutdown
 		}
-		go handleConn(conn, s, hw)
+		go handleConn(conn, s, hw, cache)
 	}
 }
 
 // handleConn reads one request, performs the bound op under the hardware
 // mutex, and writes one response. The key is the listener's, never the client's.
-func handleConn(conn net.Conn, s signer.Signer, hw *sync.Mutex) {
+func handleConn(conn net.Conn, s signer.Signer, hw *sync.Mutex, cache *pubkeyCache) {
 	defer conn.Close()
 	_ = conn.SetDeadline(timeNow().Add(connTimeout))
 
@@ -149,9 +187,7 @@ func handleConn(conn net.Conn, s signer.Signer, hw *sync.Mutex) {
 	var resp response
 	switch req.Op {
 	case "pubkey":
-		hw.Lock()
-		pub, err := s.PublicKeyDER()
-		hw.Unlock()
+		pub, err := cache.get(s, hw)
 		if err != nil {
 			resp.Error = err.Error()
 		} else {

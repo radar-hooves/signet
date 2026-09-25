@@ -51,8 +51,13 @@ func bearer(s signer.Signer, brokerURL string) (*bearerCache, error) {
 	}
 
 	// Cache missing, expired, or inside the renew window. Serialise here: the
-	// holder does the work, the waiters re-read what it wrote.
-	unlock := lockCache(brokerURL, fingerprint)
+	// holder does the work, the waiters re-read what it wrote. A timeout means
+	// the lock is genuinely still held past one mint's worth of time — report
+	// it, then proceed unlocked rather than block forever or fail this caller.
+	unlock, lockErr := lockCache(brokerURL, fingerprint)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "signet: %v; minting our own\n", lockErr)
+	}
 	defer unlock()
 
 	// Re-check under the lock — a waiter released here almost always finds the
@@ -120,7 +125,10 @@ func refreshBearer(s signer.Signer, brokerURL, refusedKey string) (*bearerCache,
 		return nil, fmt.Errorf("compute key fingerprint: %w", err)
 	}
 
-	unlock := lockCache(brokerURL, fingerprint)
+	unlock, lockErr := lockCache(brokerURL, fingerprint)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "signet: %v; minting our own\n", lockErr)
+	}
 	defer unlock()
 
 	if cached := loadCache(brokerURL, fingerprint); cached != nil && cached.Key != refusedKey {

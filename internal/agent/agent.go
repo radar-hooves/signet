@@ -18,7 +18,12 @@
 //     identity. All hardware access is serialised through one mutex (needed for
 //     a single-access token like a YubiKey; harmless overhead for TPM/Enclave).
 //     The agent exposes exactly two ops, pubkey and sign; it never generates or
-//     overwrites a key (enrolment stays a deliberate host operation).
+//     overwrites a key (enrolment stays a deliberate host operation). A
+//     binding's pubkey answer is read from hardware once and cached in memory
+//     for the socket's lifetime (server.go's pubkeyCache) — it cannot change
+//     without a restart — so a burst of clients asking at once (a Claude Code
+//     session's worth of `headers` helpers) costs the card one open, not one
+//     per client.
 //
 //   - the client side (client.go, selected by `--agent <socket>` on sign / enrol
 //     / auth / verify): a Signer that forwards PublicKeyDER and Sign over the

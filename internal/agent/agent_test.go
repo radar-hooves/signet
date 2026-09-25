@@ -270,6 +270,124 @@ func TestClientBurstSucceedsDespiteExternalContention(t *testing.T) {
 	}
 }
 
+// stubSPKI is a minimal valid base64-encoded SPKI DER for a P-256 public key
+// (the same fixture internal/attest's tests use), so a cardOpenSigner can
+// stand in for the card in a test that runs the fingerprint/cache path, not
+// only the agent's own pubkey/sign RPCs.
+const stubSPKI = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAQIDBAUGBwgJCgsMDQ4PEBESExQV" +
+	"FhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/"
+
+// cardOpenSigner models physical hardware that cannot be opened twice at
+// once: PublicKeyDER and Sign each claim an exclusive "open" and error,
+// PC/SC-sharing-violation style, if another call already holds it — the shape
+// pivSigner actually has (openFirstYubiKey/yk.Close() per call). It counts
+// real opens of each kind so a test can prove the agent needed the hardware
+// only once, however many clients asked at once. pubkeyDER, left empty,
+// defaults to a "PUB_"+name tag; a test that feeds the answer through
+// internal/attest's fingerprint computation sets it to stubSPKI instead.
+type cardOpenSigner struct {
+	name        string
+	pubkeyDER   string
+	open        int32
+	pubkeyOpens int32
+	signOpens   int32
+}
+
+func (s *cardOpenSigner) Enrol(bool) (string, error) { return s.PublicKeyDER() }
+
+func (s *cardOpenSigner) PublicKeyDER() (string, error) {
+	if !atomic.CompareAndSwapInt32(&s.open, 0, 1) {
+		return "", fmt.Errorf("card busy: the smart card cannot be accessed because of other connections outstanding")
+	}
+	defer atomic.StoreInt32(&s.open, 0)
+	atomic.AddInt32(&s.pubkeyOpens, 1)
+	time.Sleep(time.Millisecond) // widen the window a real PC/SC open holds
+	if s.pubkeyDER != "" {
+		return s.pubkeyDER, nil
+	}
+	return "PUB_" + s.name, nil
+}
+
+func (s *cardOpenSigner) Sign(message string) (string, error) {
+	if !atomic.CompareAndSwapInt32(&s.open, 0, 1) {
+		return "", fmt.Errorf("card busy: the smart card cannot be accessed because of other connections outstanding")
+	}
+	defer atomic.StoreInt32(&s.open, 0)
+	atomic.AddInt32(&s.signOpens, 1)
+	time.Sleep(time.Millisecond)
+	return "SIG_" + s.name + ":" + message, nil
+}
+
+// TestAgentCachesPubkeyAcrossConcurrentClients is the herd-cost proof: a
+// session start's fan-out of MCP servers each ask the same agent binding for
+// its public key at once. Before the agent memoized the answer, every one of
+// those was a fresh hardware read serialised behind hw — cheap for a handful,
+// but the cost that let 76 of 88 MCP servers time out on atlas
+// (radar-hooves/master-project#321). With memoization, the herd costs the
+// hardware exactly one open, however many clients ask, and every client still
+// gets the right answer.
+func TestAgentCachesPubkeyAcrossConcurrentClients(t *testing.T) {
+	var hw sync.Mutex
+	card := &cardOpenSigner{name: "A"}
+	client := startAgent(t, card, &hw)
+
+	const n = 60
+	var wg sync.WaitGroup
+	pubs := make([]string, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			pubs[i], errs[i] = client.PublicKeyDER()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("client %d: %v", i, err)
+		}
+		if pubs[i] != "PUB_A" {
+			t.Errorf("client %d pubkey = %q, want PUB_A", i, pubs[i])
+		}
+	}
+	if opens := atomic.LoadInt32(&card.pubkeyOpens); opens != 1 {
+		t.Errorf("card pubkey opens = %d, want exactly 1 across %d concurrent clients", opens, n)
+	}
+
+	// A later, sequential caller must still get the cached answer, not a fresh
+	// hardware read: the memo holds for the binding's whole lifetime.
+	pub, err := client.PublicKeyDER()
+	if err != nil || pub != "PUB_A" {
+		t.Fatalf("later PublicKeyDER = %q, %v; want PUB_A, nil", pub, err)
+	}
+	if opens := atomic.LoadInt32(&card.pubkeyOpens); opens != 1 {
+		t.Errorf("card pubkey opens after a later call = %d, want still 1", opens)
+	}
+}
+
+// TestAgentPubkeyCacheNotPoisonedByFailure proves a failed fetch is not
+// memoized: IsCardBusy answers must stay retryable (client.go's
+// callWithBusyRetry depends on this), never permanently poisoned by one
+// transient refusal.
+func TestAgentPubkeyCacheNotPoisonedByFailure(t *testing.T) {
+	var hw sync.Mutex
+	card := &cardOpenSigner{name: "A"}
+	atomic.StoreInt32(&card.open, 1) // pre-held: the first fetch must fail
+	client := startAgent(t, card, &hw)
+
+	if _, err := client.PublicKeyDER(); err == nil {
+		t.Fatal("PublicKeyDER: want an error while the card is held, got nil")
+	}
+	atomic.StoreInt32(&card.open, 0) // released, as a transient contender would
+
+	pub, err := client.PublicKeyDER()
+	if err != nil || pub != "PUB_A" {
+		t.Fatalf("PublicKeyDER after release = %q, %v; want PUB_A, nil — a failed fetch must not be cached", pub, err)
+	}
+}
+
 func TestParseBind(t *testing.T) {
 	sock, slot, err := parseBind("/run/signet/bd.sock=9c")
 	if err != nil || sock != "/run/signet/bd.sock" || slot != "9c" {
