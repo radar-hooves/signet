@@ -64,6 +64,8 @@ The canonical message signed is `{challenge_id}.{nonce}`; signet speaks only the
 
 Re-runs reuse the cache and renew the bearer as it ages: a cached token still more than 30 minutes from expiry is reused as-is; within 30 minutes of expiry signet renews it; a `401` on renew (or a token past its maximum lifetime) triggers a fresh attestation. A cached bearer the broker refuses at the vend door (`401`) is likewise discarded, re-attested once, and the vend retried. `403`, `404` and `429` are the broker's settled answers and are never retried. The cache is keyed by broker URL and the enrolled public key's fingerprint (the first 16 hex characters of SHA-256 over the SPKI DER public key), so re-enrolling a new key for the same broker never serves a stale bearer minted for the old key.
 
+Concurrent processes finding a cold cache single-flight through an advisory lock on the cache file: one mints, the rest wait and then read what it wrote, so a session's worth of processes needing the same bearer cost one attestation between them. A waiter gives up after 30 seconds — long enough for one real mint, so a wait still inside it is ordinary contention — and proceeds to mint its own rather than block forever; that case is reported on stderr rather than swallowed, since the lock being held that long means the holder is stuck, not merely slow.
+
 ## Wiring signet as a credential helper
 
 A credential helper is a small program a consumer shells out to whenever it needs a fresh credential, instead of the consumer holding a standing secret of its own. `auth` fits that contract exactly: it prints an `Authorization` header on stdout and exits, and the consumer captures that output. There is no daemon, socket, or keepalive; signet runs once per request and exits, like `git credential` or AWS's `credential_process`.
@@ -327,5 +329,5 @@ signet version
 Prints the signet version, platform, and Go runtime. The format is:
 
 ```text
-signet v2026.9.5 darwin/arm64 (go1.25.10)
+signet v2026.9.6 darwin/arm64 (go1.25.10)
 ```

@@ -7,7 +7,7 @@
 class Signet < Formula
   desc "Single Go binary machine-identity attest client for Portcullis"
   homepage "https://github.com/radar-hooves/signet"
-  version "2026.9.5"
+  version "2026.9.6"
   license "MIT"
 
   on_macos do

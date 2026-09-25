@@ -10,4 +10,4 @@ package attest
 
 // lockCache is a no-op on Windows, matching bearer's contract that a caller
 // which cannot take the lock still proceeds.
-func lockCache(_, _ string) func() { return func() {} }
+func lockCache(_, _ string) (func(), error) { return func() {}, nil }

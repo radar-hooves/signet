@@ -18,7 +18,7 @@
   fetchurl,
 }:
 let
-  version = "2026.9.5";
+  version = "2026.9.6";
 
   platformMap = {
     "aarch64-darwin" = "darwin-arm64";
