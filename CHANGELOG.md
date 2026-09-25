@@ -6,13 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [2026.9.5] - 2026-09-25
+
+### Changed
+
+- **signet is now a single software backend.** The Secure Enclave, TPM 2.0 and PIV backends, and the `agent` socket daemon that served them, are removed; every consumer identity is now a P-256 private key in a PKCS8 PEM file, mode `0600`. `--backend`, `--slot`, `--agent` and every hardware-specific flag are removed — an invocation still passing one now fails fast, naming the flag, rather than being silently ignored. `--identity` stays: it names the key file, defaulting to `$XDG_CONFIG_HOME/portcullis/<identity>.key` (`~/.config/portcullis/consumer.key` by default), the same path and format the household's `vend-token.py` already reads and writes, so a key enrolled by either tool is usable by the other. A new `--key` flag overrides the path directly. `enrol` mints the key file when absent (never overwriting an existing one) and prints the same SPKI DER base64 public key shape as before, so the broker enrolment contract is unchanged; `sign`, `auth`, `verify`, `headers`, `vend-to-file`, `exec` and their output contracts and exit codes are unchanged; `doctor` now reports the key file's presence, mode and public-key fingerprint instead of hardware availability. The bearer cache, the cross-process lock, `vend-to-file` and the vend-failure classification are unchanged. This is the household's move away from hardware-rooted machine identity (operator ruling, 25/09/2026): signet is now a plain Go binary — no cgo, no per-platform native build, cross-compiles freely — and both release targets (`linux/amd64`, `darwin/arm64`) build from one runner.
+
+## [2026.9.4] - 2026-09-24
+
+### Fixed
+
+- A transient PC/SC sharing violation on the PIV backend is now retried instead of failing outright.
+
+## [2026.9.3] - 2026-09-24
+
 ### Added
 
 - `--backend`, `--slot` and `--identity` now default to `SIGNET_BACKEND`, `SIGNET_SLOT` and `SIGNET_IDENTITY` when the flag is absent, on every subcommand that accepts them; a passed flag always wins, and an unset (or explicitly-empty) env var leaves the built-in default (auto-detect / `9c` / `consumer`) unchanged. A Claude Code stdio MCP server's `args` are a literal array, not a shell command line: it can substitute one whole token from one env var, as `--identity ${SIGNET_EXEC_IDENTITY:-github-mcp}` already does for backend/identity, but it cannot splat a host-only, PIV-only `--slot <n>` pair into an array shared by every host, some of which (the Macs) have no slot to name — and an empty per-token `--slot ${SIGNET_SLOT:-}` breaks argument parsing there. Measured 24/09/2026 on atlas: the shared `.mcp.json`'s `github` and `aws` stdio entries had no way to carry atlas's PIV slot at all, so both landed on the wrong enrolled identity and the broker refused them. A host now names its backend/slot/identity once, in its own declared environment (a fleet-provisioned Claude Code `env` block, not a shell profile).
 
 ### Fixed
 
-- The broker-rejected-attestation hint (`verify`, `headers`, `vend-to-file`, `exec`) no longer names "this key is not enrolled" as the cause of a 401 with confidence it does not have. Portcullis caps pending challenges at ten per key and mints a throwaway challenge past the cap so the token leg answers the SAME body (`{"error":"unauthenticated","detail":"attestation failed"}`) whether the key genuinely is not enrolled or the cap was hit — deliberate, to preserve the no-enumeration-oracle property, but it makes the two causes indistinguishable from the response alone today. Measured 2026-09-14 on atlas: one `nixos-rebuild switch` started 17 concurrent `signet vend-to-file` processes against one key, the cap refused the other seven, every key was enrolled, and a one-second wait would have cleared it — but the hint sent the reader hunting an enrolment problem that did not exist. The hint now quotes the broker's own `error`/`detail` fields and names both live causes ("not enrolled for this identity, or too many challenges pending for this key: retry in a moment") instead of picking one. `docs/usage.md`'s exit-3 row is reworded to match. No retry is added: `radar-hooves/portcullis` does not yet answer a cap hit with a response signet can branch on (a typed 429 carrying `code`/`retry_after` was proposed but had not landed on `main` as of this fix) — once it does, `verify`/`headers`/`vend-to-file`/`exec` can retry once and narrow the hint back to whichever cause the broker actually named.
+- The broker-rejected-attestation hint (`verify`, `headers`, `vend-to-file`, `exec`) no longer names "this key is not enrolled" as the cause of a 401 with confidence it does not have. Portcullis caps pending challenges at ten per key and mints a throwaway challenge past the cap so the token leg answers the SAME body (`{"error":"unauthenticated","detail":"attestation failed"}`) whether the key genuinely is not enrolled or the cap was hit — deliberate, to preserve the no-enumeration-oracle property, but it makes the two causes indistinguishable from the response alone today. Measured 2026-09-14 on atlas: one `nixos-rebuild switch` started 17 concurrent `signet vend-to-file` processes against one key, the cap refused the other seven, every key was enrolled, and a one-second wait would have cleared it — but the hint sent the reader hunting an enrolment problem that did not exist. The hint now quotes the broker's own `error`/`detail` fields and names both live causes ("not enrolled for this identity, or too many challenges pending for this key: retry in a moment") instead of picking one. `docs/usage.md`'s exit-3 row is reworded to match.
 
 ## [2026.9.2] - 2026-09-13
 
