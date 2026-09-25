@@ -409,6 +409,26 @@ func TestVendToFile_KeyMissing(t *testing.T) {
 	}
 }
 
+// TestVendToFile_KeyCardBusy verifies that a transient PC/SC sharing
+// violation (openFirstYubiKey's retries exhausted, per
+// internal/signer.IsCardBusy) is reported as "card busy", never misread as
+// "no key enrolled", and that dest is left untouched.
+func TestVendToFile_KeyCardBusy(t *testing.T) {
+	setTempHome(t)
+	dest := filepath.Join(t.TempDir(), "dest.txt")
+	s := &stubSigner{pubKeyErr: errors.New(`PIV: open "reader": card busy (gave up after 6 retries): the smart card cannot be accessed because of other connections outstanding`)}
+	code, err := VendToFile(s, "http://127.0.0.1:0", "my-cred", dest, "", 0o600, false)
+	if err == nil {
+		t.Fatal("VendToFile: want a non-nil error for a card-busy failure (exit 1, not a typed conclusive exit)")
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1 (card busy is transient, not the typed key-missing exit)", code)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Errorf("dest must not be created on failure; stat error = %v", statErr)
+	}
+}
+
 // TestVendToFile_AttestRejected verifies exit code 3 when the broker returns
 // 401 on the attestation challenge, and that the shared attestRejectedHint
 // wording quotes the broker's own detail and names both live causes (not

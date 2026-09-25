@@ -28,6 +28,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-piv/piv-go/v2/piv"
 	"golang.org/x/term"
@@ -78,13 +79,67 @@ func pivSlot(slot string) (piv.Slot, string, error) {
 	)
 }
 
-// pivCards returns the list of PC/SC smart card reader names visible to the OS.
-// Used by the doctor subcommand and by openFirstYubiKey.
-func pivCards() ([]string, error) {
+// pivCards returns the list of PC/SC smart card reader names visible to the
+// OS. Used by the doctor subcommand and by openFirstYubiKey. A package var
+// (not a plain func) so a test can substitute a fake reader list without a
+// physical card.
+var pivCards = func() ([]string, error) {
 	return piv.Cards()
 }
 
-// openFirstYubiKey opens the first YubiKey listed by piv.Cards().
+// pivOpen is piv.Open behind a seam so a test can inject a fake opener that
+// simulates PC/SC contention without a physical card.
+var pivOpen = piv.Open
+
+// pivSleep is time.Sleep behind a seam so a test can drive openFirstYubiKey's
+// retry loop without actually waiting.
+var pivSleep = time.Sleep
+
+// pivSharingViolation is PC/SC error 0x8010000B (SCARD_E_SHARING_VIOLATION)'s
+// exact message text, verbatim from go-piv's pcscErrMsgs table. It is the
+// signal that another process — this host's SSH agent (a recorded fleet
+// gotcha) or a concurrent signet identity sharing the same physical YubiKey —
+// holds the PC/SC-exclusive connection RIGHT NOW, not that this card, slot or
+// key is unusable. go-piv's own error type wrapping this code (scErr) is
+// unexported, so text is the only signal a caller outside that package has.
+const pivSharingViolation = "the smart card cannot be accessed because of other connections outstanding"
+
+// cardBusyMarker appears in the error openFirstYubiKey returns once its
+// retries against pivSharingViolation are exhausted. It is matched as plain
+// text (IsCardBusy), never a typed error, because it must survive a round
+// trip through the agent's socket: the agent forwards a Sign/PublicKeyDER
+// failure as a JSON string (internal/agent/server.go), which loses any Go
+// error type, so a client-side retry can only recognise it by this text.
+const cardBusyMarker = "card busy"
+
+// pivBusyRetries and pivBusyBackoff bound how long openFirstYubiKey waits out
+// another process's hold on the card before giving up. A Claude Code session
+// start fans out ~85 concurrent MCP server spawns, several of which reach
+// this host's SSH agent (or another signet identity) at the same instant this
+// one opens the card; PC/SC's exclusive-open handshake is sub-second once the
+// card is free, so six tries at 300ms (1.8s total) rides out a typical
+// overlap without holding a caller for long. A caller that still cannot get
+// the card gets a clearly typed, retryable error rather than the confusing
+// "no key enrolled" a raw sharing violation was previously misread as.
+var (
+	pivBusyRetries = 6
+	pivBusyBackoff = 300 * time.Millisecond
+)
+
+// IsCardBusy reports whether err is (or wraps) openFirstYubiKey's retries
+// against a transient PC/SC sharing violation running out — another process
+// still held the card after the whole retry window — as opposed to a genuine
+// "no key enrolled" or hardware fault. A caller must not treat this the same
+// as an empty slot: the fix is to try again, never to (re-)enrol.
+func IsCardBusy(err error) bool {
+	return err != nil && strings.Contains(err.Error(), cardBusyMarker)
+}
+
+// openFirstYubiKey opens the first YubiKey listed by piv.Cards(), retrying a
+// transient PC/SC sharing violation — another process briefly holding the
+// exclusive connection — rather than surfacing it as if the card or key were
+// unusable. A non-transient open failure (no card present, a reader vanishing
+// mid-call) is returned immediately, unretried.
 func openFirstYubiKey() (*piv.YubiKey, error) {
 	cards, err := pivCards()
 	if err != nil {
@@ -93,11 +148,23 @@ func openFirstYubiKey() (*piv.YubiKey, error) {
 	if len(cards) == 0 {
 		return nil, fmt.Errorf("PIV: no smart cards (YubiKeys) found")
 	}
-	yk, err := piv.Open(cards[0])
-	if err != nil {
-		return nil, fmt.Errorf("PIV: open %q: %w", cards[0], err)
+
+	var openErr error
+	for attempt := 0; attempt <= pivBusyRetries; attempt++ {
+		var yk *piv.YubiKey
+		yk, openErr = pivOpen(cards[0])
+		if openErr == nil {
+			return yk, nil
+		}
+		if !strings.Contains(openErr.Error(), pivSharingViolation) {
+			return nil, fmt.Errorf("PIV: open %q: %w", cards[0], openErr)
+		}
+		if attempt < pivBusyRetries {
+			pivSleep(pivBusyBackoff)
+		}
 	}
-	return yk, nil
+	return nil, fmt.Errorf("PIV: open %q: %s (gave up after %d retries): %w",
+		cards[0], cardBusyMarker, pivBusyRetries, openErr)
 }
 
 // pivPublicKey returns the existing P-256 public key in the given slot, or nil

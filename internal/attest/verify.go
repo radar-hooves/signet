@@ -70,9 +70,16 @@ func brokerGet(endpoint, bearerKey string) (int, []byte, error) {
 func Verify(s signer.Signer, brokerURL, credName string) (exitCode int, err error) {
 	fmt.Printf("signet verify — broker: %s\n\n", brokerURL)
 
-	// Step 1: confirm a key is enrolled.
+	// Step 1: confirm a key is enrolled. A transient PC/SC sharing violation
+	// (another process — commonly this host's SSH agent — holding the same
+	// physical card) is NOT "no key enrolled": signer.IsCardBusy distinguishes
+	// the two so a caller is never told to re-enrol a key that is simply busy.
 	_, keyErr := s.PublicKeyDER()
 	if keyErr != nil {
+		if signer.IsCardBusy(keyErr) {
+			fmt.Printf("  key              FAIL           card busy, try again: %v\n", keyErr)
+			return 1, keyErr
+		}
 		fmt.Printf("  key              FAIL           no key enrolled: %v\n", keyErr)
 		return ExitVerifyKeyMissing, nil
 	}

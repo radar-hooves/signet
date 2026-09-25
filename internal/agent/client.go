@@ -8,6 +8,22 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"github.com/radar-hooves/signet/internal/signer"
+)
+
+// clientBusyRetries and clientBusyBackoff bound a SECOND, outer retry layer:
+// openFirstYubiKey (internal/signer/piv.go) already rides out a transient PC/SC
+// sharing violation inside the agent before answering, but a contender holding
+// the card longer than that window (a slow SSH session sharing the same
+// physical YubiKey) still surfaces as the agent's own "card busy, retries
+// exhausted" answer. Retrying the whole round trip here — dial, request,
+// response — a few more times gives that contender a second chance to clear
+// before the client gives up and reports failure.
+var (
+	clientBusyRetries = 3
+	clientBusyBackoff = 400 * time.Millisecond
+	clientSleep       = time.Sleep
 )
 
 // timeNow is time.Now, named so the deadline arithmetic in server.go and
@@ -34,7 +50,7 @@ func (c *Client) Enrol(userPresence bool) (string, error) {
 }
 
 func (c *Client) PublicKeyDER() (string, error) {
-	resp, err := c.call(request{Op: "pubkey"})
+	resp, err := c.callWithBusyRetry(request{Op: "pubkey"})
 	if err != nil {
 		return "", err
 	}
@@ -45,7 +61,7 @@ func (c *Client) PublicKeyDER() (string, error) {
 }
 
 func (c *Client) Sign(message string) (string, error) {
-	resp, err := c.call(request{Op: "sign", Message: message})
+	resp, err := c.callWithBusyRetry(request{Op: "sign", Message: message})
 	if err != nil {
 		return "", err
 	}
@@ -53,6 +69,22 @@ func (c *Client) Sign(message string) (string, error) {
 		return "", fmt.Errorf("signet agent: empty signature in response")
 	}
 	return resp.SignatureB64, nil
+}
+
+// callWithBusyRetry retries the whole round trip while the agent reports the
+// card busy (signer.IsCardBusy), and returns immediately on success or any
+// other failure — a dial error, "no key enrolled", a broker-unrelated fault —
+// none of which a retry can fix.
+func (c *Client) callWithBusyRetry(req request) (response, error) {
+	var resp response
+	var err error
+	for attempt := 0; ; attempt++ {
+		resp, err = c.call(req)
+		if err == nil || attempt >= clientBusyRetries || !signer.IsCardBusy(err) {
+			return resp, err
+		}
+		clientSleep(clientBusyBackoff)
+	}
 }
 
 func (c *Client) call(req request) (response, error) {

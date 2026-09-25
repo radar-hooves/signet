@@ -79,9 +79,16 @@ const (
 // should exit with that code. A non-nil error with exit code 1 is an
 // unexpected transport, encoding, or filesystem failure.
 func VendToFile(s signer.Signer, brokerURL, credName, dest, field string, mode os.FileMode, printShape bool) (exitCode int, err error) {
-	// Step 1: confirm a key is enrolled.
+	// Step 1: confirm a key is enrolled. A transient PC/SC sharing violation
+	// (another process — commonly this host's SSH agent — holding the same
+	// physical card) is NOT "no key enrolled": signer.IsCardBusy distinguishes
+	// the two so a caller is never told to re-enrol a key that is simply busy.
 	_, keyErr := s.PublicKeyDER()
 	if keyErr != nil {
+		if signer.IsCardBusy(keyErr) {
+			fmt.Fprintf(os.Stderr, "signet vend-to-file: card busy, try again: %v\n", keyErr)
+			return 1, keyErr
+		}
 		fmt.Fprintf(os.Stderr, "signet vend-to-file: no key enrolled: %v\n", keyErr)
 		return ExitVendToFileKeyMissing, nil
 	}

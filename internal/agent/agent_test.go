@@ -143,6 +143,133 @@ func TestAgentDialErrorOnMissingSocket(t *testing.T) {
 	}
 }
 
+// contendedSigner simulates a backend racing an EXTERNAL process (this host's
+// SSH agent, in the atlas incident this fix targets) for the same physical
+// card, modelled as a CAS-guarded flag shared across all calls. It never
+// retries internally — that is piv.go's job, already exhausted by the time a
+// real backend would report this — so every failure it returns must be ridden
+// out by the CLIENT's own retry (callWithBusyRetry) for a caller to succeed.
+type contendedSigner struct {
+	name string
+	held *int32 // 0 = free, 1 = held by the "external" contender for this instant
+}
+
+func (s *contendedSigner) tryClaim() error {
+	if !atomic.CompareAndSwapInt32(s.held, 0, 1) {
+		return fmt.Errorf("PIV: open %q: card busy (transient PC/SC contention): the smart card cannot be accessed because of other connections outstanding", s.name)
+	}
+	return nil
+}
+
+func (s *contendedSigner) Enrol(bool) (string, error) { return s.PublicKeyDER() }
+
+func (s *contendedSigner) PublicKeyDER() (string, error) {
+	if err := s.tryClaim(); err != nil {
+		return "", err
+	}
+	defer atomic.StoreInt32(s.held, 0)
+	return "PUB_" + s.name, nil
+}
+
+func (s *contendedSigner) Sign(message string) (string, error) {
+	if err := s.tryClaim(); err != nil {
+		return "", err
+	}
+	defer atomic.StoreInt32(s.held, 0)
+	return "SIG_" + s.name + ":" + message, nil
+}
+
+// TestClientRetriesCardBusyThenSucceeds proves a single call rides out a
+// bounded number of "card busy" answers from the agent transparently.
+func TestClientRetriesCardBusyThenSucceeds(t *testing.T) {
+	savedRetries, savedBackoff := clientBusyRetries, clientBusyBackoff
+	clientBusyRetries = 5
+	clientBusyBackoff = 3 * time.Millisecond // real waits: retries must span the release below
+	t.Cleanup(func() { clientBusyRetries, clientBusyBackoff = savedRetries, savedBackoff })
+
+	var hw sync.Mutex
+	var held int32 = 1 // start "held" by the external contender
+	client := startAgent(t, &contendedSigner{name: "A", held: &held}, &hw)
+
+	// Release the external hold shortly after the client's first attempt would
+	// have failed, so the retry (not the first try) is what succeeds.
+	go func() {
+		time.Sleep(4 * time.Millisecond)
+		atomic.StoreInt32(&held, 0)
+	}()
+
+	sig, err := client.Sign("m")
+	if err != nil {
+		t.Fatalf("Sign: want the retry to ride out transient contention, got %v", err)
+	}
+	if sig != "SIG_A:m" {
+		t.Fatalf("Sign = %q, want SIG_A:m", sig)
+	}
+}
+
+// TestClientBurstSucceedsDespiteExternalContention is the serialisation proof
+// this fix exists for: a burst of concurrent requests (a Claude Code session
+// fanning out ~85 MCP server spawns) against a card an external process (this
+// host's SSH agent) is repeatedly grabbing must ALL succeed, not fail with
+// "no key enrolled" or "unexpected error" the way atlas did.
+func TestClientBurstSucceedsDespiteExternalContention(t *testing.T) {
+	savedRetries, savedBackoff, savedSleep := clientBusyRetries, clientBusyBackoff, clientSleep
+	clientBusyRetries = 200 // generous ceiling; no real backoff wait below
+	clientBusyBackoff = 0
+	clientSleep = func(time.Duration) {}
+	t.Cleanup(func() { clientBusyRetries, clientBusyBackoff, clientSleep = savedRetries, savedBackoff, savedSleep })
+
+	var hw sync.Mutex
+	var held int32
+	client := startAgent(t, &contendedSigner{name: "A", held: &held}, &hw)
+
+	// The external contender: a background goroutine standing in for this
+	// host's SSH agent, cycling brief exclusive holds on the same "card" for
+	// the whole burst. It yields a "free" window between holds long enough for
+	// a real socket round trip to land — a tight, un-throttled spin here would
+	// win essentially every race against the socket dial + encode + decode a
+	// real request costs, understating how briefly a real contender holds a
+	// PC/SC connection.
+	stop := make(chan struct{})
+	var extWG sync.WaitGroup
+	extWG.Add(1)
+	go func() {
+		defer extWG.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if atomic.CompareAndSwapInt32(&held, 0, 1) {
+				time.Sleep(50 * time.Microsecond)
+				atomic.StoreInt32(&held, 0)
+			}
+			time.Sleep(200 * time.Microsecond) // a free window each cycle
+		}
+	}()
+
+	const n = 90
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = client.Sign(fmt.Sprintf("m%d", i))
+		}(i)
+	}
+	wg.Wait()
+	close(stop)
+	extWG.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("request %d failed despite retry: %v", i, err)
+		}
+	}
+}
+
 func TestParseBind(t *testing.T) {
 	sock, slot, err := parseBind("/run/signet/bd.sock=9c")
 	if err != nil || sock != "/run/signet/bd.sock" || slot != "9c" {

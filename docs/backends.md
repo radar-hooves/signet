@@ -44,6 +44,8 @@ The PIV backend talks to a YubiKey (or any PIV token) over PC/SC via `go-piv`, s
 
 The key is configured `PINPolicyNever` / `TouchPolicyNever`, so signing requires no PIN entry and no touch. That makes it suitable for an unattended consumer, but it means there is no per-signature presence gate on the PIV backend; physical custody of the token is the control. (The Secure Enclave backend is the one that offers an optional presence gate, via `enrol --user-presence`.)
 
+PC/SC is an exclusive resource: every `Enrol`, `PublicKeyDER`, and `Sign` call opens the token and closes it again on return, so a second process holding it open at that instant (this host's `ssh-agent`, or another signet identity sharing the same physical YubiKey) makes PC/SC refuse the open outright. signet treats that specific refusal as transient — it retries for up to ~2 seconds before surfacing a distinctly worded "card busy" failure — rather than reporting it as a missing key or a broken token.
+
 ## No software fallback
 
 There is no software-key fallback, by design. A host with no secure hardware genuinely cannot produce a hardware-rooted identity, so signet fails loudly rather than quietly degrading to a key on disk. The whole point of the tool is that "this identity is hardware-rooted" is never a claim that is sometimes false; a silent software fallback would reintroduce exactly the at-rest secret the tool exists to eliminate. If auto-detection finds no usable hardware, the answer is to add hardware (a TPM, a YubiKey) or pick a backend explicitly with `--backend`, not to fall back.

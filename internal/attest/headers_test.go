@@ -574,6 +574,23 @@ func TestHeaders_KeyMissing(t *testing.T) {
 	}
 }
 
+// TestHeaders_KeyCardBusy verifies that a transient PC/SC sharing violation
+// (openFirstYubiKey's retries exhausted, per internal/signer.IsCardBusy) is
+// reported as "card busy", never misread as "no key enrolled" — the exact
+// confusion atlas hit when ~85 concurrent MCP server spawns raced this host's
+// SSH agent for the same physical YubiKey (master-project#321).
+func TestHeaders_KeyCardBusy(t *testing.T) {
+	setTempHome(t)
+	s := &stubSigner{pubKeyErr: errors.New(`PIV: open "reader": card busy (gave up after 6 retries): the smart card cannot be accessed because of other connections outstanding`)}
+	code, err := Headers(s, "http://127.0.0.1:0", "my-cred", "Authorization", "bearer", false)
+	if err == nil {
+		t.Fatal("Headers: want a non-nil error for a card-busy failure (exit 1, not a typed conclusive exit)")
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1 (card busy is transient, not the typed key-missing exit)", code)
+	}
+}
+
 // TestHeaders_AttestRejected verifies exit code 3 when the broker returns 401
 // on the attestation challenge (resolves to a broker-rejection, not transport):
 // headers is the path every headersHelper consumer runs, and the guidance line

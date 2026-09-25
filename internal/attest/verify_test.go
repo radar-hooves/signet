@@ -126,6 +126,21 @@ func TestVerify_KeyMissing(t *testing.T) {
 	}
 }
 
+// TestVerify_KeyCardBusy verifies that a transient PC/SC sharing violation
+// (openFirstYubiKey's retries exhausted, per internal/signer.IsCardBusy) is
+// reported as "card busy", never misread as "no key enrolled".
+func TestVerify_KeyCardBusy(t *testing.T) {
+	setTempHome(t)
+	s := &stubSigner{pubKeyErr: errors.New(`PIV: open "reader": card busy (gave up after 6 retries): the smart card cannot be accessed because of other connections outstanding`)}
+	code, err := Verify(s, "http://127.0.0.1:0", "")
+	if err == nil {
+		t.Fatal("Verify: want a non-nil error for a card-busy failure (exit 1, not a typed conclusive exit)")
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1 (card busy is transient, not the typed key-missing exit)", code)
+	}
+}
+
 // TestVerify_AttestRejected verifies exit code 3 when the broker returns 401
 // on the attestation challenge (resolves to a broker-rejection, not transport),
 // that the guidance line steers the reader local rather than reading like a
