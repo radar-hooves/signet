@@ -26,6 +26,6 @@ signet uses calendar versioning (`YYYY.M.x`). Only the most recent release recei
 
 ## Scope
 
-signet's security model rests on one guarantee: the P-256 signing key is generated in, and never leaves, the secure hardware (Apple Secure Enclave, TPM 2.0, or a YubiKey/PIV token). Vulnerabilities in scope include anything that weakens this guarantee — key exfiltration, bearer-cache exposure, replay attacks, or bypass of the hardware attestation contract. Supply-chain issues (dependency tampering, release artifact integrity) are also in scope.
+signet's security model rests on one guarantee: a consumer's P-256 signing key is a file only that consumer can read (mode `0600`), and a signature proves possession of it for one specific, single-use broker challenge. Vulnerabilities in scope include anything that weakens this guarantee — key exposure, bearer-cache exposure, replay attacks, or bypass of the attestation contract. Supply-chain issues (dependency tampering, release artifact integrity) are also in scope.
 
 Out of scope: the broker that verifies signatures and mints bearers (signet carries no broker code). Broker-side issues should be reported to the broker's maintainers.

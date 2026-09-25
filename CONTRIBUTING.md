@@ -1,62 +1,14 @@
 # Contributing to signet
 
-## Build prerequisites
-
-signet uses cgo, which means the build is always a native, per-platform build driven by `make`. You cannot cross-compile from one OS to another.
-
-### macOS
-
-- Go 1.25
-- Xcode command line tools (`xcode-select --install`), so that `xcrun swiftc` is available — the Secure Enclave backend is compiled from `internal/signer/enclave.swift`, a small CryptoKit shim
-- A working C compiler (provided by the Xcode tools)
-
-### Linux
-
-- Go 1.25
-- A C compiler (`gcc` or `clang`)
-- PC/SC development headers for the PIV backend cgo link: `apt install libpcsclite-dev` on Debian/Ubuntu
-- TPM support is pure Go (`go-tpm`) and needs no extra system library
-
-### Windows
-
-- Go 1.25
-- A C compiler (MinGW-w64 or MSVC)
-- TPM is via TBS (built-in); PIV is via PC/SC (built-in on Windows 8+)
-
 ## Build and test
 
-```sh
-make build       # compile ./signet (runs the Swift shim step first on macOS)
-make test        # CGO_ENABLED=1 go test ./...
-make clean       # remove the binary and Swift intermediates
-```
-
-Never use a bare `go build` on macOS; `make build` compiles the Swift shim into `internal/signer/libsignet_se.a` first, which the cgo link requires. On Linux and Windows `go build ./cmd/signet` would work but `make build` is the canonical path on all platforms.
-
-### TPM simulator tests
-
-The TPM backend has tests that run against the go-tpm software simulator. They pull in an OpenSSL dependency and are skipped by default:
+signet is a plain Go binary — Go 1.25, no cgo, no native per-platform step.
 
 ```sh
-go test -tags tpmsimulator ./...
+make build       # compile ./signet
+make test        # go test ./...
+make clean        # remove the binary
 ```
-
-### PIV hardware tests
-
-PIV real-hardware tests are gated behind an environment variable to avoid running against production tokens accidentally:
-
-```sh
-SIGNET_PIV_HW_TEST=1 go test ./...
-```
-
-## Per-platform native-build constraint
-
-cgo cannot be cross-compiled without a matching target sysroot. Each platform's binary must be built on that platform:
-
-- **darwin/arm64** — built on a Mac (Apple Silicon); the Swift shim step is macOS-only
-- **linux/amd64** — built on a Linux/amd64 host
-
-The release workflow mirrors this with one native runner per target. Adding a new platform is a new matrix row in `.github/workflows/release.yaml`.
 
 ## Code style
 
