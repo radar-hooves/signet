@@ -11,27 +11,10 @@ import (
 // TestHelpText verifies the help block mentions all subcommands.
 func TestHelpText(t *testing.T) {
 	text := helpText()
-	for _, sub := range []string{"enrol", "sign", "auth", "verify", "headers", "vend-to-file", "exec", "agent", "version", "doctor"} {
+	for _, sub := range []string{"enrol", "sign", "auth", "verify", "headers", "vend-to-file", "exec", "version", "doctor"} {
 		if !strings.Contains(text, sub) {
 			t.Errorf("helpText() does not mention %q", sub)
 		}
-	}
-}
-
-// TestBindList verifies the repeatable --bind flag accumulator.
-func TestBindList(t *testing.T) {
-	var b bindList
-	if err := b.Set("/run/signet/a.sock=9c"); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := b.Set("/run/signet/b.sock=9d"); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if len(b) != 2 {
-		t.Fatalf("len = %d, want 2", len(b))
-	}
-	if got := b.String(); got != "/run/signet/a.sock=9c,/run/signet/b.sock=9d" {
-		t.Errorf("String() = %q", got)
 	}
 }
 
@@ -57,52 +40,45 @@ func TestEnvOr(t *testing.T) {
 	}
 }
 
-// TestSignerFlagsEnvDefaults pins the three-way precedence signerFlags must
-// give --backend/--slot/--identity: an explicit flag always wins, a set
-// SIGNET_* env var is the default when the flag is absent, and an unset env
-// var falls through to the built-in default (auto-detect/empty) unchanged.
-// This is the fix for the fleet's stdio MCP entries (github, aws on atlas),
-// whose literal args array cannot splat a host-only --slot the way a shell
-// string can, so the host must be able to name it once in its environment.
+// TestSignerFlagsEnvDefaults pins the precedence signerFlags must give
+// --identity: an explicit flag always wins, a set SIGNET_IDENTITY env var is
+// the default when the flag is absent, and an unset env var falls through to
+// the built-in default (empty, resolved later to "consumer") unchanged. This
+// is what lets a fleet host's stdio MCP entries name their identity once in
+// their declared environment rather than on every invocation.
 func TestSignerFlagsEnvDefaults(t *testing.T) {
-	parse := func(t *testing.T, args []string) (backend, slot, identity string) {
+	parse := func(t *testing.T, args []string) (identity, key string) {
 		t.Helper()
 		fs := flag.NewFlagSet("test", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		b, s, i, _ := signerFlags(fs)
+		i, k := signerFlags(fs)
 		if err := fs.Parse(args); err != nil {
 			t.Fatalf("Parse: %v", err)
 		}
-		return *b, *s, *i
+		return *i, *k
 	}
 
 	t.Run("env beats built-in default", func(t *testing.T) {
-		t.Setenv("SIGNET_BACKEND", "piv")
-		t.Setenv("SIGNET_SLOT", "93")
 		t.Setenv("SIGNET_IDENTITY", "github-mcp")
-		backend, slot, identity := parse(t, nil)
-		if backend != "piv" || slot != "93" || identity != "github-mcp" {
-			t.Errorf("backend=%q slot=%q identity=%q, want piv/93/github-mcp", backend, slot, identity)
+		identity, _ := parse(t, nil)
+		if identity != "github-mcp" {
+			t.Errorf("identity=%q, want github-mcp", identity)
 		}
 	})
 
 	t.Run("flag beats env", func(t *testing.T) {
-		t.Setenv("SIGNET_BACKEND", "piv")
-		t.Setenv("SIGNET_SLOT", "93")
 		t.Setenv("SIGNET_IDENTITY", "github-mcp")
-		backend, slot, identity := parse(t, []string{"--backend", "secure-enclave", "--slot", "9c", "--identity", "deploy"})
-		if backend != "secure-enclave" || slot != "9c" || identity != "deploy" {
-			t.Errorf("backend=%q slot=%q identity=%q, want secure-enclave/9c/deploy", backend, slot, identity)
+		identity, key := parse(t, []string{"--identity", "deploy", "--key", "/tmp/deploy.key"})
+		if identity != "deploy" || key != "/tmp/deploy.key" {
+			t.Errorf("identity=%q key=%q, want deploy//tmp/deploy.key", identity, key)
 		}
 	})
 
 	t.Run("unset env changes nothing", func(t *testing.T) {
-		os.Unsetenv("SIGNET_BACKEND")
-		os.Unsetenv("SIGNET_SLOT")
 		os.Unsetenv("SIGNET_IDENTITY")
-		backend, slot, identity := parse(t, nil)
-		if backend != "" || slot != "" || identity != "" {
-			t.Errorf("backend=%q slot=%q identity=%q, want all empty (auto-detect / built-in defaults)", backend, slot, identity)
+		identity, key := parse(t, nil)
+		if identity != "" || key != "" {
+			t.Errorf("identity=%q key=%q, want both empty (built-in defaults)", identity, key)
 		}
 	})
 }

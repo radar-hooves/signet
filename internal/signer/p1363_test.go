@@ -15,8 +15,8 @@ import (
 // format using the Go standard library, converts it to P1363 via derToP1363,
 // and verifies the decoded r,s still validate against the original public key.
 //
-// This exercises the format-conversion path shared by the SE and PIV backends
-// without requiring any hardware.
+// This exercises derToP1363 directly against the standard library's own DER
+// encoding, independent of the software backend's own signing path.
 func TestDerToP1363_SoftwareKey(t *testing.T) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

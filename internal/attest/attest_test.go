@@ -20,8 +20,8 @@ import (
 const stubSPKI = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAQIDBAUGBwgJCgsMDQ4PEBESExQV" +
 	"FhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/"
 
-// stubSigner is a hardware-free Signer that returns a canned signature and
-// a deterministic public key (stubSPKI) for use in tests.
+// stubSigner is a fake Signer that returns a canned signature and a
+// deterministic public key (stubSPKI) for use in tests.
 type stubSigner struct {
 	sig       string
 	err       error
@@ -29,7 +29,7 @@ type stubSigner struct {
 	pubKeyErr error  // when non-nil, PublicKeyDER returns this error
 }
 
-func (s *stubSigner) Enrol(_ bool) (string, error) { return stubSPKI, nil }
+func (s *stubSigner) Enrol() (string, error) { return stubSPKI, nil }
 func (s *stubSigner) PublicKeyDER() (string, error) {
 	if s.pubKeyErr != nil {
 		return "", s.pubKeyErr

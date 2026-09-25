@@ -1,8 +1,10 @@
 // Package datadir locates signet's single data directory (~/.signet).
 //
-// All persistent state — the Secure-Enclave key blobs and the bearer cache —
-// lives under this one dotfolder (the household ~/.tool convention, not an XDG
-// split across ~/.local/share and ~/.cache).
+// The bearer cache lives under this one dotfolder (the household ~/.tool
+// convention, not an XDG split across ~/.local/share and ~/.cache). The
+// signing key itself lives elsewhere, at $XDG_CONFIG_HOME/portcullis
+// (internal/signer.DefaultKeyPath), the path the household's vend-token.py
+// also uses.
 package datadir
 
 import (

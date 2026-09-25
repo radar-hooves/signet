@@ -77,7 +77,7 @@ func attestRejectedHint(be *BrokerError) string {
 	return fmt.Sprintf(
 		"broker refused this attestation (%s) — not enrolled for this identity, "+
 			"or too many challenges pending for this key: retry in a moment. "+
-			"--identity selects the secure-enclave or tpm key, --slot the PIV slot; unset uses the default",
+			"--identity selects which local key signs; --key overrides its file path directly",
 		vendBrokerDetail([]byte(be.Body)),
 	)
 }

@@ -1,60 +1,36 @@
-// Command signet is a standalone hardware machine-identity CLI.
+// Command signet is a machine-identity attest client for Portcullis, the
+// household secrets broker.
 //
-// signet generates and manages a non-exportable signing key sealed in the
-// host's secure hardware (Apple Secure Enclave, TPM 2.0, or YubiKey PIV),
-// and speaks the /v1/attest attestation protocol: it signs a broker challenge
-// in hardware and exchanges the proof for a short-lived bearer token.
-//
-// Three backends are compiled in and selected at runtime (automatically, or via
-// --backend). Only the Secure Enclave backend is behind a darwin build tag; TPM
-// and PIV compile on every platform.
-//
-//   - secure-enclave — macOS Secure Enclave via CryptoKit (Swift shim linked in
-//     via cgo). Auto-selected on darwin. Works on an unsigned/ad-hoc binary: the
-//     Enclave's wrapped key blob is stored in a file, not the keychain, so no
-//     code-signing entitlement is required.
-//
-//   - tpm — TPM 2.0, pure Go via google/go-tpm. Auto-selected on linux/windows
-//     when a TPM resource manager device is reachable (/dev/tpmrm0 or TBS).
-//
-//   - piv — YubiKey PIV, cgo against PC/SC. Fallback on all platforms. The slot
-//     is selectable (--slot), so one token roots one identity per slot.
+// signet holds a P-256 private key in a PKCS8 PEM file and speaks the
+// /v1/attest attestation protocol: it signs a broker challenge with that key
+// and exchanges the proof for a short-lived bearer token.
 //
 // Usage:
 //
-//	signet enrol   [flags] [--user-presence]
+//	signet enrol   [flags]
 //	signet sign    [flags] <message>
 //	signet auth    [flags] <broker-url>
 //	signet verify  [flags] --broker <url> [--credential <name>]
 //	signet headers [flags] --broker <url> --credential <name> [--header <name>] [--format bearer|raw] [--bare]
 //	signet vend-to-file [flags] --broker <url> [--field <name>] [--mode <octal>] [--print-shape] <name> <dest>
 //	signet exec    [flags] --broker <url> --credential <name> --env-var <NAME> [--field <name>] -- <command> [args...]
-//	signet agent   --bind <socket>=<slot-or-identity> [--bind ...] [--backend piv|tpm]
 //	signet version
 //	signet doctor  [flags]
 //
 // Flags (enrol, sign, auth, verify, headers, vend-to-file, exec, doctor):
 //
-//	--backend   secure-enclave | tpm | piv   (default: $SIGNET_BACKEND, else auto-detect)
-//	--slot      9a | 9c | 9d | 9e | 82..95   (piv backend only; default: $SIGNET_SLOT, else 9c)
-//	--identity  <name>                       (secure-enclave and tpm backends; default: $SIGNET_IDENTITY, else consumer)
-//	--agent     <socket>                     (sign via a signet agent socket, not local hardware)
-//	--user-presence                          (enrol only; require Touch ID per signature)
+//	--identity  <name>   key name (default: $SIGNET_IDENTITY, else consumer)
+//	--key       <path>   explicit key file path (default: $XDG_CONFIG_HOME/portcullis/<identity>.key)
 //
-// SIGNET_BACKEND, SIGNET_SLOT and SIGNET_IDENTITY set the flag's default when
-// the flag is absent; a passed flag always wins. This lets a host name its
-// backend/slot/identity once, in its own environment, for every invocation —
-// the shape a stdio consumer with a literal (non-shell) args array needs,
-// since it cannot splat a multi-token flag pair the way a shell string can.
+// SIGNET_IDENTITY sets --identity's default when the flag is absent; a passed
+// flag always wins.
 //
-// --identity names the local key, the way an SSH key filename picks one key of
-// several, so one machine can hold more than one identity: Secure Enclave
-// (se-<identity>.key) and TPM (tpm-<identity>.key, except the default identity
-// "consumer", which stays at the TPM's original fixed persistent handle for
-// backward compatibility) both key their on-disk state by it. It is local-only
-// and never sent to the broker, which resolves the identity from the presented
-// public key (resolve-by-key). It is ignored by the PIV backend, where the
-// slot selects the key.
+// --identity names the local key, the way an SSH key filename picks one key
+// of several, so one machine can hold more than one identity — each maps to
+// its own key file under $XDG_CONFIG_HOME/portcullis. It is local-only and
+// never sent to the broker, which resolves the identity from the presented
+// public key (resolve-by-key). --key overrides the computed path directly,
+// for a caller that wants to name the file itself rather than by identity.
 package main
 
 import (
@@ -66,7 +42,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/radar-hooves/signet/internal/agent"
 	"github.com/radar-hooves/signet/internal/attest"
 	"github.com/radar-hooves/signet/internal/signer"
 )
@@ -101,7 +76,7 @@ func main() {
 // run()'s single error/exit-1 contract.
 func runVerify(args []string) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
-	backend, slot, identity, agentSock := signerFlags(fs)
+	identity, key := signerFlags(fs)
 	broker := fs.String("broker", "", "broker URL (required)")
 	cred := fs.String("credential", "", "credential name to probe (optional)")
 	help, err := parseArgs(fs, args)
@@ -116,7 +91,7 @@ func runVerify(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: signet verify: --broker is required")
 		return 1
 	}
-	s, err := selectSigner(*backend, *slot, *identity, *agentSock)
+	s, err := selectSigner(*identity, *key)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -133,7 +108,7 @@ func runVerify(args []string) int {
 func runHeaders(args []string) int {
 	fs := flag.NewFlagSet("headers", flag.ContinueOnError)
 	fs.Usage = headersUsage
-	backend, slot, identity, agentSock := signerFlags(fs)
+	identity, key := signerFlags(fs)
 	broker := fs.String("broker", "", "broker URL (required)")
 	cred := fs.String("credential", "", "credential name to vend (required)")
 	header := fs.String("header", "Authorization", `HTTP header name to key the JSON object by (ignored, and refused, with --bare)`)
@@ -172,7 +147,7 @@ func runHeaders(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: signet headers: --header cannot be combined with --bare (--bare prints the value alone, with no header name); drop --header, or drop --bare to get %s\n", jsonShapeExample(*header, *format))
 		return 1
 	}
-	s, err := selectSigner(*backend, *slot, *identity, *agentSock)
+	s, err := selectSigner(*identity, *key)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -214,7 +189,7 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 // never conflict with run()'s single error/exit-1 contract.
 func runVendToFile(args []string) int {
 	fs := flag.NewFlagSet("vend-to-file", flag.ContinueOnError)
-	backend, slot, identity, agentSock := signerFlags(fs)
+	identity, key := signerFlags(fs)
 	broker := fs.String("broker", "", "broker URL (required)")
 	field := fs.String("field", "", "static-material field to write (required when the credential has more than one static field; ignored for session material, which always writes access_token)")
 	modeFlag := fs.String("mode", "0600", "file mode for the written destination, octal (e.g. 0600)")
@@ -240,7 +215,7 @@ func runVendToFile(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: signet vend-to-file: --mode: %v\n", modeErr)
 		return 1
 	}
-	s, err := selectSigner(*backend, *slot, *identity, *agentSock)
+	s, err := selectSigner(*identity, *key)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -290,47 +265,24 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// signerFlags registers the backend/slot/identity/agent selection flags shared by
-// every signing subcommand on fs and returns pointers to their parsed values.
+// signerFlags registers the identity/key selection flags shared by every
+// signing subcommand on fs and returns pointers to their parsed values.
 //
-// --backend, --slot and --identity default to SIGNET_BACKEND, SIGNET_SLOT and
-// SIGNET_IDENTITY when the flag is not passed, so a host can name its backend,
-// slot and identity ONCE in its own environment (a fleet-declared Claude Code
-// `env` block, not a shell profile) and have every invocation honour it. This
-// exists because a Claude Code stdio MCP server's args are a literal array,
-// not a shell command line: it can substitute one whole token from one env
-// var (as the existing `--identity ${SIGNET_EXEC_IDENTITY:-github-mcp}`
-// entries do), but it cannot splat a host-only, PIV-only `--slot <n>` pair
-// into an array shared by every host, some of which have no PIV slot to name.
-// The flag always wins when passed, so this never silently overrides an
-// explicit per-invocation choice — only fills in one that was never made.
-func signerFlags(fs *flag.FlagSet) (backend, slot, identity, agentSock *string) {
-	backend = fs.String("backend", envOr("SIGNET_BACKEND", ""), "hardware backend: secure-enclave | tpm | piv (default: $SIGNET_BACKEND, else auto-detect)")
-	slot = fs.String("slot", envOr("SIGNET_SLOT", ""), "PIV slot: 9a | 9c | 9d | 9e | 82..95 (piv backend only; default: $SIGNET_SLOT, else 9c)")
-	identity = fs.String("identity", envOr("SIGNET_IDENTITY", ""), "key name (secure-enclave and tpm backends; default: $SIGNET_IDENTITY, else consumer)")
-	agentSock = fs.String("agent", "", "path to a signet agent socket; sign/get the public key via the agent instead of local hardware")
+// --identity defaults to SIGNET_IDENTITY when the flag is not passed, so a
+// host can name its identity ONCE in its own environment (a fleet-declared
+// Claude Code `env` block, not a shell profile) and have every invocation
+// honour it — the flag always wins when passed.
+func signerFlags(fs *flag.FlagSet) (identity, key *string) {
+	identity = fs.String("identity", envOr("SIGNET_IDENTITY", ""), "key name (default: $SIGNET_IDENTITY, else consumer)")
+	key = fs.String("key", "", "path to the P-256 key file (default: $XDG_CONFIG_HOME/portcullis/<identity>.key)")
 	return
 }
 
-// selectSigner picks the signer for a signing subcommand. With --agent set, all
-// signing is forwarded to the agent socket (the backend/slot/identity flags are
-// the agent's concern, not the client's); otherwise a local hardware signer is
-// built per the backend/slot/identity selection.
-func selectSigner(backend, slot, identity, agentSock string) (signer.Signer, error) {
-	if agentSock != "" {
-		return agent.NewClient(agentSock), nil
-	}
-	return signer.New(backend, slot, identity)
-}
-
-// bindList collects repeatable --bind <socket>=<slot> values.
-type bindList []string
-
-func (b *bindList) String() string { return strings.Join(*b, ",") }
-
-func (b *bindList) Set(v string) error {
-	*b = append(*b, v)
-	return nil
+// selectSigner builds the software signer for the given identity/key
+// selection: an explicit --key wins outright, else the path is computed from
+// --identity.
+func selectSigner(identity, key string) (signer.Signer, error) {
+	return signer.New(key, identity)
 }
 
 func run(args []string) error {
@@ -342,8 +294,7 @@ func run(args []string) error {
 	switch args[0] {
 	case "enrol":
 		fs := flag.NewFlagSet("enrol", flag.ContinueOnError)
-		backend, slot, identity, agentSock := signerFlags(fs)
-		userPresence := fs.Bool("user-presence", false, "require Touch ID per signature (enrol only; secure-enclave backend)")
+		identity, key := signerFlags(fs)
 		help, err := parseArgs(fs, args[1:])
 		if help {
 			return nil
@@ -351,11 +302,11 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		s, err := selectSigner(*backend, *slot, *identity, *agentSock)
+		s, err := selectSigner(*identity, *key)
 		if err != nil {
 			return err
 		}
-		spki, err := s.Enrol(*userPresence)
+		spki, err := s.Enrol()
 		if err != nil {
 			return err
 		}
@@ -364,7 +315,7 @@ func run(args []string) error {
 
 	case "sign":
 		fs := flag.NewFlagSet("sign", flag.ContinueOnError)
-		backend, slot, identity, agentSock := signerFlags(fs)
+		identity, key := signerFlags(fs)
 		help, err := parseArgs(fs, args[1:])
 		if help {
 			return nil
@@ -375,7 +326,7 @@ func run(args []string) error {
 		if fs.NArg() < 1 {
 			return fmt.Errorf("signet sign: a message argument is required (signet sign [flags] <message>)")
 		}
-		s, err := selectSigner(*backend, *slot, *identity, *agentSock)
+		s, err := selectSigner(*identity, *key)
 		if err != nil {
 			return err
 		}
@@ -388,7 +339,7 @@ func run(args []string) error {
 
 	case "auth":
 		fs := flag.NewFlagSet("auth", flag.ContinueOnError)
-		backend, slot, identity, agentSock := signerFlags(fs)
+		identity, key := signerFlags(fs)
 		help, err := parseArgs(fs, args[1:])
 		if help {
 			return nil
@@ -399,25 +350,11 @@ func run(args []string) error {
 		if fs.NArg() < 1 {
 			return fmt.Errorf("signet auth: a broker URL argument is required (signet auth [flags] <broker-url>)")
 		}
-		s, err := selectSigner(*backend, *slot, *identity, *agentSock)
+		s, err := selectSigner(*identity, *key)
 		if err != nil {
 			return err
 		}
 		return attest.Auth(s, fs.Arg(0))
-
-	case "agent":
-		fs := flag.NewFlagSet("agent", flag.ContinueOnError)
-		var binds bindList
-		fs.Var(&binds, "bind", "socket=slot-or-identity binding, repeatable (e.g. /run/signet/bd.sock=9c for piv, /run/signet/deploy.sock=deploy for tpm/secure-enclave)")
-		backend := fs.String("backend", envOr("SIGNET_BACKEND", "piv"), "hardware backend the agent owns: piv (selectable slots), tpm or secure-enclave (selectable identities) (default: $SIGNET_BACKEND, else piv)")
-		help, err := parseArgs(fs, args[1:])
-		if help {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		return agent.Run(*backend, binds)
 
 	case "version":
 		// runtime.Version() already carries the "go" prefix (e.g. go1.25.10).
@@ -426,10 +363,7 @@ func run(args []string) error {
 
 	case "doctor":
 		fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-		// Accept the shared flags so a command line built for another subcommand
-		// can be replayed against doctor; --backend narrows the probe to one
-		// backend, the rest are meaningless here and ignored.
-		backend, _, _, _ := signerFlags(fs)
+		identity, key := signerFlags(fs)
 		help, err := parseArgs(fs, args[1:])
 		if help {
 			return nil
@@ -437,7 +371,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		return cmdDoctor(*backend)
+		return cmdDoctor(*identity, *key)
 
 	case "verify":
 		// Reached only if someone calls run("verify", ...) directly (e.g. in tests
@@ -524,40 +458,34 @@ func headersUsage() {
 Usage:
   signet headers --broker <url> --credential <name> [--header <name>] [--format bearer|raw] [--bare]
 
-`+headersHelpBody()+`Backend selection flags (--backend, --slot, --identity, --agent): signet --help
+`+headersHelpBody()+`Key selection flags (--identity, --key): signet --help
 `)
 }
 
 // helpText returns the structured help block listing all subcommands.
 func helpText() string {
-	return `signet — hardware machine-identity CLI
+	return `signet — machine-identity attest client for Portcullis
 
 Usage:
   signet <subcommand> [flags]
 
 Subcommands:
-  enrol         Generate (or recover) the hardware key and print the SPKI public key
-  sign          Sign a message with the hardware key and print the base64 signature
+  enrol         Generate (or recover) the key and print the SPKI public key
+  sign          Sign a message with the key and print the base64 signature
   auth          Attest to a broker and print the Authorization header (JSON)
   verify        Consumer pre-flight: attest and optionally probe a credential vend
   headers       Attest, vend a credential, and print one HTTP header (compact JSON, or --bare)
   vend-to-file  Attest, vend a credential, and write one field's value to a file
   exec          Attest, vend a credential, set it as an env var, and exec a command
-  agent         Own the hardware and sign on request over Unix sockets (serve mode)
   version       Print the signet version, platform, and Go runtime
-  doctor        Probe each backend and report availability (--backend probes one)
+  doctor        Probe the key file and report its availability
 
 Flags (enrol, sign, auth, verify, headers, vend-to-file, exec, doctor):
-  --backend    secure-enclave | tpm | piv   (default: $SIGNET_BACKEND, else auto-detect)
-  --slot       9a | 9c | 9d | 9e | 82..95   (piv only; 82..95 are hex retired slots; default: $SIGNET_SLOT, else 9c)
-  --identity   <name>                       (secure-enclave, tpm; default: $SIGNET_IDENTITY, else consumer — tpm's
-                                              default identity keeps the original fixed persistent handle;
-                                              any other name gets its own key)
-  --agent      <socket>                     (sign via a signet agent socket, not local hardware)
-  --user-presence                           (enrol only; require Touch ID per signature; secure-enclave only)
+  --identity   <name>   key name (default: $SIGNET_IDENTITY, else consumer)
+  --key        <path>   explicit key file path (default: $XDG_CONFIG_HOME/portcullis/<identity>.key)
 
-SIGNET_BACKEND, SIGNET_SLOT and SIGNET_IDENTITY set the flag's default when the
-flag is absent; a passed flag always wins.
+SIGNET_IDENTITY sets --identity's default when the flag is absent; a passed
+flag always wins.
 
 Verify flags:
   --broker     <url>    broker URL (required)
@@ -590,17 +518,5 @@ Vend-to-file exit codes:
   5  credential not found — credential name absent from the catalogue
   6  unusable material — credential cannot be resolved to a single field's value
 
-` + execHelpBody() + `
-Agent (serve mode):
-  signet agent --bind <socket>=<slot-or-identity> [--bind ...] [--backend piv|tpm|secure-enclave]
-    One daemon owns the hardware and serves a Unix socket per binding. The
-    binding's right-hand side means a PIV slot under --backend piv (e.g. 9c),
-    or a named identity under --backend tpm or secure-enclave (e.g. deploy,
-    already enrolled with 'signet enrol --backend tpm --identity deploy'). Each
-    socket is pinned to one key; clients on it can only sign with that key —
-    never another binding's. The agent serves pubkey and sign only — it never
-    generates a key, so signing against a never-enrolled identity is refused,
-    loudly, rather than silently creating one.
-
-`
+` + execHelpBody()
 }

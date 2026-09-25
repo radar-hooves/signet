@@ -41,7 +41,7 @@ func runExec(args []string) int {
 
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	fs.Usage = execUsage
-	backend, slot, identity, agentSock := signerFlags(fs)
+	identity, key := signerFlags(fs)
 	broker := fs.String("broker", "", "broker URL (required)")
 	cred := fs.String("credential", "", "credential name to vend (required)")
 	envVar := fs.String("env-var", "", "environment variable name to set on the child process (required)")
@@ -78,7 +78,7 @@ func runExec(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: signet exec: --env-var is required")
 		return 1
 	}
-	s, err := selectSigner(*backend, *slot, *identity, *agentSock)
+	s, err := selectSigner(*identity, *key)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -143,6 +143,6 @@ func execUsage() {
 Usage:
   signet exec [flags] --broker <url> --credential <name> --env-var <NAME> -- <command> [args...]
 
-`+execHelpBody()+`Backend selection flags (--backend, --slot, --identity, --agent): signet --help
+`+execHelpBody()+`Key selection flags (--identity, --key): signet --help
 `)
 }

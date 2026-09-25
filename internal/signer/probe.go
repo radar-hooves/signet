@@ -1,39 +1,32 @@
-// probe.go: backend availability probes for 'signet doctor'.
-//
-// Each probe answers "is this backend usable on this host right now?" with a
-// human-readable detail line. The Secure Enclave probe is platform-split
-// (probeEnclave in enclave_darwin.go / enclave_stub.go) because it needs the
-// cgo shim on macOS.
+// probe.go: the software backend's availability probe for 'signet doctor'.
 package signer
 
-import "fmt"
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"os"
+)
 
-// ProbeEnclave reports whether the Secure Enclave backend is usable.
-func ProbeEnclave() (ok bool, detail string) {
-	return probeEnclave()
-}
-
-// ProbeTPM reports whether a TPM device is reachable.
-func ProbeTPM() (ok bool, detail string) {
-	t, err := openTPM()
+// ProbeSoftware reports whether a key file exists at path and, if so, its
+// mode and its public key's fingerprint — 16 hex characters of SHA-256 over
+// the SPKI DER, the same fingerprint the attest package's bearer cache keys
+// on, so a doctor reading matches what the broker actually enrolled.
+func ProbeSoftware(path string) (ok bool, detail string) {
+	info, err := os.Stat(path)
 	if err != nil {
-		return false, fmt.Sprintf("open failed: %v", err)
+		return false, fmt.Sprintf("no key at %s; run 'signet enrol' first", path)
 	}
-	if t == nil {
-		return false, "no TPM device found (/dev/tpmrm0, /dev/tpm0, or TBS)"
-	}
-	t.Close()
-	return true, "TPM device opened successfully"
-}
-
-// ProbePIV reports whether any PC/SC smart card (YubiKey) is visible.
-func ProbePIV() (ok bool, detail string) {
-	cards, err := pivCards()
+	spkiB64, err := newSoftwareSigner(path).PublicKeyDER()
 	if err != nil {
-		return false, fmt.Sprintf("list smart cards failed: %v", err)
+		return false, fmt.Sprintf("%s exists but could not be read: %v", path, err)
 	}
-	if len(cards) == 0 {
-		return false, "no smart cards / YubiKeys detected"
+	der, err := base64.StdEncoding.DecodeString(spkiB64)
+	if err != nil {
+		return false, fmt.Sprintf("%s: undecodable public key", path)
 	}
-	return true, fmt.Sprintf("%d card(s) detected: %v", len(cards), cards)
+	sum := sha256.Sum256(der)
+	fingerprint := hex.EncodeToString(sum[:])[:16]
+	return true, fmt.Sprintf("key present, mode %s, fingerprint %s", info.Mode().Perm(), fingerprint)
 }

@@ -1,4 +1,4 @@
-// p1363.go: shared ECDSA wire-format utilities used by multiple backends.
+// p1363.go: ECDSA wire-format utilities.
 package signer
 
 import (
