@@ -1,18 +1,13 @@
-# Canonical Homebrew formula for signet, the cross-platform Go binary for
-# hardware-rooted machine identity. This is the source of truth; copy it into the
-# Homebrew tap repo (radar-hooves/homebrew-tap, as `Formula/signet.rb`) so users can
+# Canonical Homebrew formula for signet, the Portcullis machine-identity attest
+# client. This is the source of truth; copy it into the Homebrew tap repo
+# (radar-hooves/homebrew-tap, as `Formula/signet.rb`) so users can
 # `brew install radar-hooves/tap/signet`. Bump `version` and the sha256s when a new
 # signet release is cut (the .sha256 files are published alongside each release
 # tarball).
-#
-# SECURE ENCLAVE: the SE backend works on the pre-built release binary (unsigned/ad-hoc).
-# It uses CryptoKit's self-stored-key-blob model — the Enclave's opaque hardware-wrapped
-# blob is stored in a file (~/.signet/), the keychain is never
-# touched, and no code-signing entitlement is required. All three backends work unsigned.
 class Signet < Formula
-  desc "Single Go binary for hardware-rooted machine identity; TPM, PIV, and Secure Enclave all work on the unsigned release binary"
+  desc "Single Go binary machine-identity attest client for Portcullis"
   homepage "https://github.com/radar-hooves/signet"
-  version "2026.9.1"
+  version "2026.9.5"
   license "MIT"
 
   on_macos do

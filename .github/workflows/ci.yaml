@@ -1,9 +1,8 @@
 # Test gate on every PR and push to main.
 #
-# signet is a cgo binary (Secure Enclave Swift shim on macOS, go-piv/PC-SC on
-# Linux), so tests run natively per platform — the same matrix rationale as
-# release.yaml. Hardware-gated tests (SIGNET_PIV_HW_TEST) and the tpmsimulator
-# build tag are excluded by default, so `make test` is hardware-free.
+# signet is a plain Go binary (no cgo), so one runner covers gofmt, vet, and
+# the test suite; a cross-compile check proves the other release target still
+# builds.
 name: ci
 
 on:
@@ -14,7 +13,6 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'Makefile'
-      - 'internal/signer/enclave.swift'
       - '.github/workflows/ci.yaml'
   pull_request:
   workflow_dispatch:
@@ -29,16 +27,8 @@ permissions:
 
 jobs:
   test:
-    name: Test (${{ matrix.goos }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-latest # by-exception (2026-07-04): needs Xcode/swiftc for the SE Swift shim — cgo cross-compilation not viable on household runner
-            goos: darwin
-          - runner: ubuntu-latest # by-exception (2026-07-04): cgo requires a native linux/amd64 sysroot (libpcsclite) — not viable on the NixOS household runner
-            goos: linux
-    runs-on: ${{ matrix.runner }}
+    name: Test
+    runs-on: ubuntu-latest # by-exception (2026-07-04): public repo, GitHub cannot resolve the self-hosted-runner reusable this fleet standardises on
 
     steps:
       - name: Checkout
@@ -56,12 +46,6 @@ jobs:
           check-latest: true
           cache-dependency-path: go.sum
 
-      - name: Install PC/SC build deps (Linux go-piv/cgo backend)
-        if: matrix.goos == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libpcsclite-dev
-
       - name: gofmt
         run: |
           out="$(gofmt -l ./cmd ./internal)"
@@ -72,10 +56,13 @@ jobs:
           fi
 
       - name: go vet
-        run: CGO_ENABLED=1 go vet ./...
+        run: CGO_ENABLED=0 go vet ./...
 
       - name: Test
         run: make test
+
+      - name: Cross-compile check (darwin/arm64)
+        run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/signet
 
       # by-exception (2026-07-04): public repo — GitHub cannot resolve the
       # private ntfy-failure composite action at job setup, so the equivalent

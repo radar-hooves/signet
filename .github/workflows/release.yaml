@@ -1,33 +1,7 @@
 # Build and publish signet release binaries.
 #
-# signet is a single self-contained cross-platform Go binary with three hardware
-# backends compiled in: Secure Enclave (macOS, cgo), TPM 2.0 (go-tpm), and
-# YubiKey/PIV (go-piv).
-#
-# SECURE ENCLAVE — works on the unsigned release binary:
-#   The SE backend uses CryptoKit's self-stored-key-blob model (like age-plugin-se):
-#   it creates a hardware-bound P-256 key, stores the Enclave's opaque wrapped blob
-#   in a file (~/.signet/), and never touches the keychain.
-#   Because the keychain is bypassed, no code-signing entitlement is needed.
-#   Notarisation is irrelevant (a Gatekeeper distribution gate, not a runtime SE
-#   gate). All three backends work on the released binary.
-#
-# DARWIN BUILD — compiles the Swift shim first:
-#   The SE backend links a small Swift shim (internal/signer/enclave.swift) as a
-#   static archive (internal/signer/libsignet_se.a). `make build` handles the
-#   swiftc step then the Go build. macOS GitHub runners ship Xcode, so xcrun
-#   swiftc is available. Plain `go build` on macOS fails to link without the
-#   archive.
-#
-# WHY NATIVE PER-PLATFORM BUILDS:
-#   cgo (required by the SE and go-tpm/go-piv backends) cannot be cross-compiled
-#   without a matching target sysroot and C toolchain. Each platform builds on its
-#   own runner.
-#
-# MATRIX COVERAGE:
-#   darwin/arm64 (macos-latest), linux/amd64 (ubuntu-latest).
-#   NOT YET BUILT: darwin/amd64 (Intel Mac), linux/arm64. Add a matrix row + runner
-#   when those platforms are needed.
+# signet is a plain Go binary (no cgo), so both release targets cross-compile
+# from one runner via GOOS/GOARCH.
 name: release
 
 on:
@@ -46,18 +20,15 @@ permissions:
 jobs:
   build:
     name: Build signet (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest # by-exception (2026-07-03): public repo, no self-hosted runner access; no cgo, so cross-compiles cleanly here
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-latest # by-exception (2026-07-03): needs Xcode/swiftc for Swift shim — cgo cross-compilation not viable on household runner
-            goos: darwin
+          - goos: darwin
             goarch: arm64
-          - runner: ubuntu-latest # by-exception (2026-07-03): cgo requires native linux/amd64 sysroot — cross-compilation not viable on household runner
-            goos: linux
+          - goos: linux
             goarch: amd64
-    runs-on: ${{ matrix.runner }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -74,12 +45,6 @@ jobs:
           check-latest: true
           cache-dependency-path: go.sum
 
-      - name: Install PC/SC build deps (Linux go-piv/cgo backend)
-        if: matrix.goos == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libpcsclite-dev
-
       - name: Resolve version
         id: ver
         run: |
@@ -91,47 +56,16 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Releasing signet $v (${{ matrix.goos }}/${{ matrix.goarch }})"
 
-      - name: Build signet (Go/cgo; macOS uses make to compile the Swift shim first)
+      - name: Build signet
         id: build_go
         env:
-          CGO_ENABLED: '1'
+          CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           go version
-          make build BINARY=signet-bin VERSION="${{ steps.ver.outputs.version }}"
+          go build -ldflags "-X main.version=${{ steps.ver.outputs.version }}" -o signet-bin ./cmd/signet
           echo "bin=$PWD/signet-bin" >> "$GITHUB_OUTPUT"
-
-      - name: Code-sign signet (macOS only, optional)
-        if: matrix.goos == 'darwin'
-        env:
-          CERT_P12_BASE64: ${{ secrets.SIGNET_CERT_P12_BASE64 }}
-          CERT_PASSWORD: ${{ secrets.SIGNET_CERT_PASSWORD }}
-          SIGNING_IDENTITY: ${{ secrets.SIGNET_SIGNING_IDENTITY }}
-        run: |
-          BIN="${{ steps.build_go.outputs.bin }}"
-          if [ -z "$SIGNING_IDENTITY" ]; then
-            # The SE backend works on an unsigned binary (CryptoKit self-stored-blob
-            # model, no keychain entitlement required). An ad-hoc signature is applied
-            # here only to satisfy macOS Gatekeeper quarantine on downloaded binaries
-            # (a Gatekeeper gate, not an SE gate). Configure SIGNET_SIGNING_IDENTITY
-            # + SIGNET_CERT_P12_BASE64 + SIGNET_CERT_PASSWORD to ship a Developer ID
-            # signature instead.
-            echo "::notice::No SIGNET_SIGNING_IDENTITY secret set; shipping an ad-hoc-signed binary (SE backend still works)."
-            codesign --force --sign - "$BIN"
-          else
-            KEYCHAIN="$RUNNER_TEMP/signet-signing.keychain-db"
-            security create-keychain -p actions "$KEYCHAIN"
-            security set-keychain-settings -lut 21600 "$KEYCHAIN"
-            security unlock-keychain -p actions "$KEYCHAIN"
-            echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-            security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
-            security set-key-partition-list -S apple-tool:,apple: -k actions "$KEYCHAIN" >/dev/null
-            security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-            codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BIN"
-            rm -f "$RUNNER_TEMP/cert.p12"
-          fi
-          codesign -dvv "$BIN" 2>&1 | grep -E "Authority|Signature|TeamIdentifier" || true
 
       - name: Package signet tarball + checksum
         id: pkg_go
@@ -139,8 +73,6 @@ jobs:
           V="${{ steps.ver.outputs.version }}"
           TAR="signet-${V}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           BINDIR="$(dirname "${{ steps.build_go.outputs.bin }}")"
-          # Rename to the consumer-facing name before archiving. BSD tar (macOS)
-          # has no --transform, so mv is the portable choice across the matrix.
           mv "$BINDIR/signet-bin" "$BINDIR/signet"
           tar -czf "$TAR" -C "$BINDIR" signet
           shasum -a 256 "$TAR" | tee "$TAR.sha256"
@@ -153,11 +85,7 @@ jobs:
         run: |
           V="${{ steps.ver.outputs.version }}"
           TAG="v${V}"
-          NOTES="Single self-contained Go binary for hardware-rooted machine identity.
-          Three backends — all work on the released binary (no code signing required):
-            TPM 2.0 (Linux/Windows), YubiKey/PIV (all platforms),
-            Secure Enclave (macOS, unsigned — uses CryptoKit self-stored blob, not keychain).
-          Install and wiring: README.md. Verify with the published .sha256 files."
+          NOTES="Single Go binary attest client for Portcullis: a P-256 key in a PKCS8 PEM file, signed challenges traded for a short-lived bearer. Install and wiring: README.md. Verify with the published .sha256 files."
 
           # First job to run creates the release; subsequent jobs upload to it.
           # --clobber is safe: artifacts are per-platform so they never collide.
